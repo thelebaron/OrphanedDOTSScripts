@@ -1,0 +1,54 @@
+using Game.Components;
+using Game.Modules.Damage;
+using UnityEngine;
+
+namespace Unity.Entities
+{
+    public class AOE_DamageEffect : MonoBehaviour
+    {
+        public bool disabled = true;
+        public GameObjectEntity Player;
+        public int damage = 0;
+        public Collider[] colliders = new Collider[256];
+        
+        private void Update()
+        {
+            //Debug.Log("aoe");
+            if (Input.GetKey(KeyCode.Space) && !disabled)
+            {
+                //Debug.Log("space");
+                var dmg = new DamageEvent
+                {
+                    instigator = Player.Entity,
+                    damage = damage,
+                    direction = Vector3.zero,
+                    faction = Player.GetComponent<FactionProxy>().Value,
+                    //hitpoint = Vector3.zero,
+                    impulse = 999,
+                    //target = Entity.Null
+                };
+
+                
+                Physics.OverlapSphereNonAlloc(Player.transform.position, 55, colliders, GameLayers.MASK_COLLISION);
+                for (var i = 0; i < colliders.Length; i++)
+                {
+                    //Debug.Log("OverlapSphereNonAlloc");
+                    if (colliders[i] == null)
+                        continue;
+                    
+                    //Debug.Log("hitCollisionRef");
+                    var hitCollisionRef = colliders[i].GetComponent<HitCollisionRef>();
+
+                    if (hitCollisionRef != null)
+                    {
+                        
+                        //Debug.Log(colliders[i]);
+                        hitCollisionRef.damageEvents.Add(dmg);
+                    }
+                    
+                }
+                
+            }
+        }
+    }
+}

@@ -1,0 +1,158 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+//using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+using Unity.Mathematics;
+using UnityEngine;
+
+namespace Game.Old
+{
+	[ExecuteInEditMode]
+	public class CoverQuery : MonoBehaviour
+	{
+
+		private static int rays = 125;
+		private static float curveAmount = 360;
+		private static Vector3 origin;
+		private static float radius = 25;
+
+		public static NativeArray<Vector3> Nodes;
+
+		public static NativeArray<RaycastCommand> Commands;
+		public static NativeArray<RaycastHit> Results;
+
+		private static JobHandle _parallelJobHandle;
+		private static JobHandle _raycastHandle;
+		private static RaycastParallelJob _parallelCalcRadialJob;
+
+		public Vector3[] hiddenPositions;
+
+		// the spoke like positions which are raycast from
+		public static Vector3[] radialNodes;
+
+		//[BurstCompile]
+		public struct RaycastParallelJob : IJobParallelFor
+		{
+			//[DeallocateOnJobCompletion]
+			public NativeArray<Vector3> Nodes;
+			[DeallocateOnJobCompletion] public Vector3 Origin;    // = tr.pos 
+			[DeallocateOnJobCompletion] public float CalcAngle;   // = 0
+			[DeallocateOnJobCompletion] public float CurveAmount; // = 360.0f;
+			[DeallocateOnJobCompletion] public float Radius;      // = 25
+			[DeallocateOnJobCompletion] public int Steps;         // = 150;
+
+			public void Execute(int index)
+			{
+				//CalcAngle * Mathf.Deg2Rad
+				float posY = math.cos(CalcAngle * Mathf.Deg2Rad) * Radius;
+				float posZ = math.sin(CalcAngle * Mathf.Deg2Rad) * Radius;
+
+				Nodes[index] =  Origin.normalized + (Vector3.forward * posY) + (Vector3.right * posZ);
+				CalcAngle    += CurveAmount / Steps;
+
+			}
+		}
+
+		public Vector3[] CoverPositions(Transform target, Vector3 origin, bool chestHeight = true)
+		{
+			return null;
+		}
+
+		//[BurstCompile]
+		void Update()
+		{
+			var target = transform;
+			//bool chestHeight = true;
+			origin = transform.position;
+
+			// set radial struct members
+			_parallelCalcRadialJob.Nodes       = Nodes;
+			_parallelCalcRadialJob.CalcAngle   = 0;
+			_parallelCalcRadialJob.Origin      = transform.position;
+			_parallelCalcRadialJob.CurveAmount = curveAmount;
+			_parallelCalcRadialJob.Radius      = radius;
+			_parallelCalcRadialJob.Steps       = rays;
+
+			//schedule and complete it
+			_parallelJobHandle = _parallelCalcRadialJob.Schedule(rays, 125);
+			JobHandle.ScheduleBatchedJobs();
+			_parallelJobHandle.Complete();
+
+			//grab the results
+			radialNodes = new Vector3[_parallelCalcRadialJob.Nodes.Length];
+			for (int i = 0; i < _parallelCalcRadialJob.Nodes.Length; i++)
+			{
+				radialNodes[i] = _parallelCalcRadialJob.Nodes[i];
+			}
+
+
+
+
+			// lets shoot rays!!
+			for (int i = 0; i < rays; i++)
+			{
+				//ray cast from spoke position 
+				Commands[i] = new RaycastCommand(radialNodes[i] + origin, -radialNodes[i].normalized, radius);
+			}
+
+			//schedule and complete it
+			_raycastHandle = RaycastCommand.ScheduleBatch(Commands, Results, rays, _parallelJobHandle);
+			_raycastHandle.Complete();
+
+
+
+
+
+		}
+
+
+		private void OnEnable()
+		{
+			Commands = new NativeArray<RaycastCommand>(rays, Allocator.Persistent);
+			Results  = new NativeArray<RaycastHit>(rays, Allocator.Persistent);
+			Nodes    = new NativeArray<Vector3>(rays, Allocator.Persistent);
+
+			_parallelCalcRadialJob = new RaycastParallelJob
+			{
+				Nodes       = Nodes,
+				CalcAngle   = 0,
+				Origin      = transform.position,
+				CurveAmount = curveAmount,
+				Radius      = 25,
+				Steps       = rays
+			};
+		}
+
+		private void OnDisable()
+		{
+			Results.Dispose();
+			Commands.Dispose();
+			Nodes.Dispose();
+		}
+
+		private void LateUpdate()
+		{
+			//parallelJobHandle.Complete();
+
+			//parallelJob.Nodes.Dispose();
+
+		}
+
+		private void OnDrawGizmos()
+		{
+
+			foreach (var v in radialNodes)
+			{
+				var pos = v + transform.position;
+				Gizmos.DrawCube(pos, Vector3.one * 0.75f);
+			}
+
+			foreach (var v in hiddenPositions)
+			{
+				var pos = v + transform.position;
+				Gizmos.DrawCube(v, Vector3.one * 0.75f);
+			}
+		}
+	}
+}

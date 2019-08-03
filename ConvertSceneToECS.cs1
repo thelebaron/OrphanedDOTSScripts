@@ -1,0 +1,42 @@
+using Unity.Entities;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace Sandbox
+{
+    [ExecuteInEditMode]
+    public class ConvertSceneToECS : MonoBehaviour
+    {
+        public bool m_DoConversion;
+        public bool m_ClearEntities;
+        
+        private void Convert()
+        {
+            var e = World.Active.EntityManager;
+            var activeScene = SceneManager.GetActiveScene();
+            GameObjectConversionUtility.ConvertScene(activeScene, e.World);
+            
+            m_DoConversion = false;
+        }
+
+        private void Update()
+        {
+            if (m_DoConversion)
+            {
+                Convert();
+            }
+
+            if (m_ClearEntities)
+            {
+                Clear();
+            }
+        }
+
+        private void Clear()
+        {
+            var e = World.Active.EntityManager;
+            var activeScene = SceneManager.GetActiveScene();
+            GameObjectConversionUtility.ConvertScene(activeScene, e.World);
+        }
+    }
+}
