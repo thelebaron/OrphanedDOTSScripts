@@ -1,0 +1,60 @@
+using Game.Components;
+using Unity.Entities;
+
+namespace Game.Systems.Characters
+{
+    [UpdateAfter(typeof(SearchBarrier))]
+    public class TargetSwitchSystem : ComponentSystem
+    {
+        private ComponentGroup PushGroup;
+        private ComponentGroup PopGroup;
+
+        protected override void OnCreateManager()
+        {
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[] {typeof(Character), typeof(Target)},
+                None = new ComponentType[] {typeof(Dead)},
+            };
+
+            PushGroup = GetEntityQuery(query);
+            
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[] {typeof(Character)},
+                None = new ComponentType[] {typeof(Dead), typeof(Target)},
+            };
+
+            PopGroup = GetEntityQuery(query);
+        }
+
+        protected override void OnUpdate()
+        {
+            
+            
+            ForEach((Entity entity, ref Target target, Character character) =>
+            {
+                if (!character.Targets.Contains(target.Entity))
+                {
+                    character.Targets.Push(target.Entity);
+                    
+                }
+
+            }, PushGroup);
+
+            ForEach((Entity entity, Character character) =>
+            {
+                if (character.Targets.Count > 0)
+                {
+                    var target = character.Targets.Pop();
+                    //return;
+                    PostUpdateCommands.AddComponent<Target>(entity, new Target
+                    {
+                        Entity = target
+                    });
+                }
+
+            }, PopGroup);
+        }
+    }
+}

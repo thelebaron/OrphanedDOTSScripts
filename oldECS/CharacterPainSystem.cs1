@@ -1,0 +1,66 @@
+using Animancer;
+using Game.Components;
+using Unity.Burst;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using UnityEngine.AI;
+using Zeal;
+using Behaviour = Game.Components.Behaviour;
+using Random = UnityEngine.Random;
+
+namespace Game.Systems.Ai
+{
+
+    public class CharacterPainSystem : ComponentSystem
+    {
+        private ComponentGroup painGroup;
+
+
+        
+        protected override void OnCreateManager()
+        {
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Behaviour), typeof(Character),typeof(Pain)},
+                None = new ComponentType[]{ typeof(Dead),}
+            };
+            
+            painGroup = GetEntityQuery(query);
+            
+            //Debug.Log("booya");
+            
+        }
+
+        protected override void OnUpdate()
+        {
+            ForEach((Entity entity, Character character, ref Behaviour think, ref Pain pain) =>
+            {
+                character.ownerEntity = entity;
+                character.ResetPath();
+                character.blockMovement = 4;
+                character.isStopped = true;
+                if (character.painState.Weight == 0)
+                {
+                    character.animancer.CrossFade(character.painState );
+                }
+
+                if (character.painState.Weight > 0 && character.painState.RemainingDuration < 0.35f)// && pain.Value <=0)
+                {
+                    PostUpdateCommands.RemoveComponent<Pain>(entity);
+                }
+
+            }, painGroup);
+            
+
+            
+        }
+    }
+    
+    
+    
+    
+
+    
+}

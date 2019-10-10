@@ -1,0 +1,29 @@
+using Game.Components;
+using Unity.Entities;
+using UnityEngine;
+
+namespace Game.Systems
+{
+    public class WeaponListSystem : ComponentSystem
+    {
+        public struct Group
+        {
+            public readonly int Length;
+            public ComponentDataArray<TargetInfo> target;
+            public ComponentArray<WeaponList> weapon;
+            
+        }
+
+        [Inject]
+        public Group group;
+        
+        protected override void OnUpdate()
+        {
+            //Debug.Log("group.Length" + group.Length);
+            for (int i = 0; i < group.Length; i++)
+            {
+                group.weapon[i].targetInfo = new TargetInfo { Entity = group.target[i].Entity, Position = group.target[i].Position };
+            }
+        }
+    }
+}

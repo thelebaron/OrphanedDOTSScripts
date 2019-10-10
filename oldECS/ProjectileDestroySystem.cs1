@@ -1,0 +1,36 @@
+﻿using Unity.Entities;
+using UnityEngine;
+
+namespace Game.Modules.Projectile
+{
+    //[UpdateAfter(typeof(ShotSpawnSystem))]
+    public class ProjectileDestroySystem : ComponentSystem
+    {
+        
+        public struct Data
+        {
+            public readonly int Length;
+            public EntityArray Entities;
+            public ComponentDataArray<Projectile> Projectile;
+        }
+
+        [Inject] private Data m_Data;
+
+        
+        protected override void OnUpdate()
+        {
+            float dt = Time.deltaTime;
+
+            for (int i = 0; i < m_Data.Length; ++i)
+            {
+                Projectile s = m_Data.Projectile[i];
+                s.TimeToLive -= dt;
+                if (s.TimeToLive <= 0.0f)
+                {
+                    PostUpdateCommands.DestroyEntity(m_Data.Entities[i]);
+                }
+                m_Data.Projectile[i] = s;
+            }
+        }
+    }
+}

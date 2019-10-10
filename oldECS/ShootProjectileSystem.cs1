@@ -1,0 +1,121 @@
+﻿using System.Collections.Generic;
+using Game.Components;
+using Game.Modules.Damage;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Modules.Projectile
+{
+    public class ShootProjectileSystem : ComponentSystem
+    {
+        private List<ProjectileRequest> m_ProjectileRequests = new List<ProjectileRequest>();
+        private List<MuzzleRequest> m_MuzzleRequests = new List<MuzzleRequest>();
+
+        private struct ProjectileRequest
+        {
+            public Entity Entity;
+            public float3 Position;
+            public quaternion Rotation;
+            public float Speed;
+            public DamageEvent DamageEvent;
+        }
+        
+        private struct MuzzleRequest
+        {
+            public Entity Entity;
+            public Entity Parent;
+            public float3 Position;
+            public quaternion Rotation;
+        }
+
+        public void RequestProjectile(Entity prefab, float3 pos, quaternion rot)
+        {
+            m_ProjectileRequests.Add(new ProjectileRequest
+            {
+                Entity      = prefab,
+                Position    = pos,
+                Rotation    = rot,
+                //Speed       = speed,
+                //DamageEvent = dmg
+            });
+        }
+        public void RequestMuzzle(Entity prefab,Entity parent, float3 pos, quaternion rot)
+        {
+            m_MuzzleRequests.Add(new MuzzleRequest
+            {
+                Entity = prefab,
+                Parent = parent,
+                Position = pos,
+                Rotation = rot
+            });
+        }
+        
+        protected override void OnUpdate()
+        {
+            if (m_ProjectileRequests.Count > 0)
+            {
+                for (int i = 0; i < m_ProjectileRequests.Count; i++)
+                {
+                    InstantiateProjectile(m_ProjectileRequests[i].Entity, m_ProjectileRequests[i].Position, m_ProjectileRequests[i].Rotation, m_ProjectileRequests[i].Speed, m_ProjectileRequests[i].DamageEvent);
+                    InstantiateMuzzle(m_MuzzleRequests[i].Entity, m_MuzzleRequests[i].Parent, m_MuzzleRequests[i].Position, m_MuzzleRequests[i].Rotation);
+                }
+                m_ProjectileRequests.Clear();
+                m_ProjectileRequests.Clear();
+            }
+            /*
+            if (m_MuzzleRequests.Count > 0)
+            {
+                for (int i = 0; i < m_MuzzleRequests.Count; i++)
+                {
+                    InstantiateMuzzle(m_MuzzleRequests[i].Entity, m_MuzzleRequests[i].Parent, m_MuzzleRequests[i].Position, m_MuzzleRequests[i].Rotation);
+                }
+                m_ProjectileRequests.Clear();
+            }*/
+        }
+        
+        public void InstantiateProjectile(Entity prefab, float3 pos, quaternion rot, float incspeed, DamageEvent dmg)
+        {
+            var e = EntityManager.Instantiate(prefab);
+#if UNITY_EDITOR
+            EntityManager.SetName(e, "Projectile");
+#endif
+            EntityManager.SetComponentData(e, new Translation { Value = pos });
+            EntityManager.SetComponentData(e, new Rotation { Value = rot });
+            return;
+            EntityManager.SetComponentData(e, new Aggro
+            {
+                Radius     = 2
+            });
+            
+
+
+        }
+        
+        public void InstantiateMuzzle(Entity prefab, Entity parent, float3 pos, quaternion rot)
+        {
+            //var e = EntityManager.Instantiate(prefab);
+            var muzzle = PostUpdateCommands.Instantiate(prefab);
+            //PostUpdateCommands.AddComponent(muzzle, new Parent{Value = parent });
+            PostUpdateCommands.SetComponent(muzzle, new Translation { Value = pos });
+            PostUpdateCommands.SetComponent(muzzle, new Rotation { Value = rot });
+            //EntityManager.AddComponentData( e, new Parent{Value = parent });
+#if UNITY_EDITOR
+            //EntityManager.SetName(e, "muzzle");
+#endif
+            //EntityManager.SetComponentData(e, new Translation { Value = pos });
+            //EntityManager.SetComponentData(e, new Rotation { Value = rot });
+            
+            /*
+            EntityManager.SetComponentData(e, new Aggro
+            {
+                Radius     = 2
+            });
+            */
+
+
+        }
+    }
+}

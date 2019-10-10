@@ -1,0 +1,50 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using Game.Components;
+using Unity.Entities;
+using UnityEngine;
+//using Behaviour = Game.Components.Behaviour;
+
+namespace Game.Systems.Utility
+{
+    public class DeadDropSystem : ComponentSystem
+    {
+        public EntityQuery dropLootGroup;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+
+            //todo i dislike the behaviour tag being used to signify npcs
+            dropLootGroup = GetEntityQuery(typeof(Dead), typeof(Character), ComponentType.Exclude<LootDropped>());
+        }
+
+        protected override void OnUpdate()
+        {
+            // bootstrap any unspawned weapon entities
+            var character   = dropLootGroup.GetComponentArray<Character>();
+            var entityArray = dropLootGroup.GetEntityArray();
+
+            for (int i = 0; i < dropLootGroup.CalculateLength(); i++)
+            {
+
+                PostUpdateCommands.AddComponent(entityArray[i], new LootDropped());
+            }
+
+            for (int i = 0; i < character.Length; i++)
+            {
+                if (character[i].loot.Length > 0)
+                {
+                    foreach (var prefab in character[i].loot)
+                    {
+                        Object.Instantiate(prefab, character[i].transform.position + Vector3.up, Quaternion.identity);
+                    }
+                }
+            }
+
+
+        }
+
+    }
+}
+

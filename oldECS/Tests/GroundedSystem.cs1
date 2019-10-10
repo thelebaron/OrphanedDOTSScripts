@@ -1,0 +1,120 @@
+using Game.Components;
+using Unity.Burst;
+//using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Systems
+{
+
+    //[UpdateAfter(typeof(GroundedSystem))]
+    public class GroundedBarrier : EntityCommandBufferSystem { }
+    
+    public class GroundedSystem : JobComponentSystem
+    {
+        ComponentGroup Group;
+        private GroundedBarrier Barrier;
+        private NativeArray<RaycastCommand> raycasts;
+        private NativeArray<RaycastHit> hits;
+        
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            Barrier = World.Active.GetOrCreateManager<GroundedBarrier>();
+            Group = GetEntityQuery(ComponentType.Create<Grounded>(), ComponentType.Exclude<Dead>(), ComponentType.ReadOnly<Translation>());
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            
+            //var groundeds = Group.GetComponentDataArray<Grounded>();
+            //var positions = Group.GetComponentDataArray<Position>();
+            //var entities = Group.GetEntityArray();
+            var length = Group.CalculateLength();
+            raycasts = new NativeArray<RaycastCommand>(length, Allocator.TempJob);
+            hits = new NativeArray<RaycastHit>(length, Allocator.TempJob);
+
+            var prepareJob = new PrepareRaycast
+            {
+                RaycastCommands = raycasts,
+                Position = Group.ToComponentDataArray<Translation>(Allocator.TempJob)
+            };
+            
+            var prepareHandle = prepareJob.Schedule(length, 64, inputDeps);
+
+            var raycastHandle = RaycastCommand.ScheduleBatch(raycasts, hits, 15, prepareHandle); 
+
+            var checkHitJob = new CheckHitJob
+            {
+                RaycastCommands = raycasts,
+                CommandBuffer = Barrier.CreateCommandBuffer().ToConcurrent(),
+                Entity = Group.ToEntityArray(Allocator.TempJob),
+                RaycastHits = hits
+            };
+
+            var processHandle = checkHitJob.Schedule(length,64, raycastHandle);
+            //processHandle.Complete();
+            
+            return processHandle;
+        }
+
+        [BurstCompile(CompileSynchronously = true)]
+        public struct PrepareRaycast : IJobParallelFor
+        {
+            [WriteOnly] public NativeArray<RaycastCommand> RaycastCommands;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Translation> Position;
+
+            public void Execute(int i)
+            {
+                float3 origin = Position[i].Value + ((float3) Vector3.up * 0.1f);
+                RaycastCommands[i] = new RaycastCommand(origin, Vector3.down, 0.4f, GameLayers.LAYER_GROUND);
+            }
+        }
+        
+        //[BurstCompile]
+        public struct CheckHitJob : IJobParallelFor
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<RaycastCommand> RaycastCommands;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<RaycastHit> RaycastHits;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> Entity;
+
+            public void Execute(int index)
+            {
+                CommandBuffer.SetComponent(index, Entity[index], new Grounded
+                {
+                    Value    = RaycastHits[index].normal != Vector3.zero,
+                    //distance = RaycastHits[index].distance,
+                    normal   = RaycastHits[index].normal,
+                });
+            }
+        }  
+        
+        
+        public struct ProcessRayHit : IJob
+        {
+            public EntityCommandBuffer commandBuffer;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<RaycastCommand> RaycastCommands;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<RaycastHit> RaycastHits;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> Entity;
+
+            public void Execute()
+            {
+                for (int i = 0; i < Entity.Length; i++)
+                {
+                    commandBuffer.SetComponent(Entity[i], new Grounded
+                    {
+                        Value    = RaycastHits[i].normal != Vector3.zero,
+                        //distance = RaycastHits[i].distance,
+                        normal   = RaycastHits[i].normal,
+                    });
+                }
+            }
+        }
+      
+    }
+}

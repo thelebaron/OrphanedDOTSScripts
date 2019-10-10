@@ -1,0 +1,38 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using Game.Components;
+using Game.Systems.Tests;
+using Unity.Entities;
+using Unity.Jobs;
+using UnityEngine;
+
+namespace Game.Systems.Combat
+{
+    public class CombatManagementSystem : JobComponentSystem
+    {
+    
+        private ComponentGroup AwaitingTokenGroup;
+    
+        protected override void OnCreateManager()
+        {
+         
+            var query = new EntityQueryDesc
+            {
+                Any  = new ComponentType[]{ typeof(Target) },
+                None = new ComponentType[]{ typeof(LightAttack), typeof(HeavyAttack), typeof(Dead) }
+            };
+            AwaitingTokenGroup = GetEntityQuery(query);
+            
+            
+        }
+    
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            
+        
+            return inputDeps;
+        }
+    }
+
+
+}

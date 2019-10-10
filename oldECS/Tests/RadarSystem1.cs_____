@@ -1,0 +1,342 @@
+
+using System.Linq;
+using Game.Components;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+
+namespace Game.Systems
+{
+    // ReSharper disable once ClassNeverInstantiated.Global
+    //[UpdateAfter(typeof(RadarSystem))]
+    public class RadarBarrier : BarrierSystem
+    { }
+    
+    public class RadarSystem1 : JobComponentSystem
+    {
+        private RadarBarrier barrier;
+        private ComponentGroup HasTargetGroup;
+        private ComponentGroup DeadGroup;
+        private ComponentGroup SearchGroup;
+        private ComponentGroup EnemyGroup;
+   
+        protected override void OnCreateManager()
+        {
+            barrier = World.Active.GetOrCreateManager<RadarBarrier>();
+ 
+            SearchGroup = GetEntityQuery(typeof(Position), typeof(Rotation), typeof(Faction), typeof(Radar), ComponentType.Subtractive<Dead>(), ComponentType.Subtractive<Target>());
+
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Targetable), typeof(Position), typeof(Health), typeof(Faction) },
+                None =  new ComponentType[]{ typeof(Dead) }
+            };
+            EnemyGroup =  GetEntityQuery(query);
+            
+            
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Target), typeof(Character) },
+                None =  new ComponentType[]{ typeof(Dead) }
+            };
+            HasTargetGroup =  GetEntityQuery(query);
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Health), typeof(Dead) },
+            };
+            DeadGroup =  GetEntityQuery(query);
+        }
+        
+        struct ResultsJob : IJob
+        {
+            public EntityCommandBuffer CommandBuffer;
+            //[ReadOnly]public NativeArray<Entity> Ent;
+            [ReadOnly]public NativeArray<Entity> FindBuffer;
+            [ReadOnly]public NativeArray<RaycastHit> Hits;
+            [ReadOnly]public NativeArray<Entity> EnemyBuffer;
+            [ReadOnly]public NativeArray<Health> HealthBuffer;
+            [ReadOnly]public NativeArray<Position> PositionBuffer;
+            [ReadOnly]public NativeArray<float> DistanceBuffer;
+            
+            public void Execute()
+            {
+                var addedEntities = new Entity[FindBuffer.Length];
+                
+                for (int index = 0; index < Hits.Length; index++)
+                {
+                    if(EnemyBuffer[index].Equals(Entity.Null))
+                        continue;
+                    
+                    if(addedEntities.Contains(FindBuffer[index]))
+                        continue;
+                    
+                    // diameter of the capsule, note this wont work if the system ever needs to handle non human sized capsules but
+                    // hopefully ecs will support colliders by the time we need to address this
+                    var minDist = DistanceBuffer[index] - 0.65f;
+                
+                    if(Hits[index].distance < minDist && Hits[index].distance > 0 )
+                        continue;
+
+                    addedEntities[index] = FindBuffer[index];
+                    CommandBuffer.AddComponent(FindBuffer[index], new TargetInfo{ Entity = EnemyBuffer[index], Health = HealthBuffer[index].Value, Position = PositionBuffer[index].Value}); //
+                    
+                }
+            }
+        }
+
+        
+        
+
+  
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            //Remove dead targets, main thread this because its just easier
+            var OwnerArray = HasTargetGroup.ToEntityArray(Allocator.TempJob);
+            var OwnerTargetArray = HasTargetGroup.ToComponentDataArray<Target>(Allocator.TempJob);
+            var DeadArray = DeadGroup.ToEntityArray(Allocator.TempJob);
+            
+            for (int i = 0; i < DeadArray.Length; i++)
+            {
+                for (int j = 0; j < OwnerArray.Length; j++)
+                {
+                    if (DeadArray[i].Equals(OwnerTargetArray[j].Value))
+                    {
+                        EntityManager.RemoveComponent<Target>(OwnerArray[j]);
+                    }
+                }
+            }
+            OwnerArray.Dispose();
+            OwnerTargetArray.Dispose();
+            DeadArray.Dispose();
+            
+            var radarIncrementJob = new RadarIncrementJob
+            {
+                deltaTime = Time.fixedDeltaTime
+            };
+            var radarIncrementJobHandle = radarIncrementJob.Schedule(this);
+            
+            var count = SearchGroup.CalculateLength() * EnemyGroup.CalculateLength();
+            var radarBuffer = new NativeArray<Entity>(count, Allocator.TempJob);
+            var enemyBuffer = new NativeArray<Entity>(count, Allocator.TempJob);
+            var distanceBuffer = new NativeArray<float>(count, Allocator.TempJob);
+            var raycastsBuffer = new NativeArray<RaycastCommand>(count, Allocator.TempJob);
+            var hitsBuffer = new NativeArray<RaycastHit>(count, Allocator.TempJob);
+            
+            var radarScanJob = new RadarScanJob
+            {
+                EnemyEntity = EnemyGroup.ToEntityArray(Allocator.TempJob),
+                EnemyFaction = EnemyGroup.ToComponentDataArray<Faction>(Allocator.TempJob),
+                EnemyPosition = EnemyGroup.ToComponentDataArray<Position>(Allocator.TempJob),
+                RadarEntityBuffer = radarBuffer,
+                EnemyEntityBuffer = enemyBuffer,
+                DistancesBuffer = distanceBuffer,
+                RaycastsBuffer = raycastsBuffer
+            };
+            var radarScanJobHandle = radarScanJob.Schedule(this, radarIncrementJobHandle);
+            var raycastCommandHandle = RaycastCommand.ScheduleBatch(raycastsBuffer, hitsBuffer, 32, radarScanJobHandle);
+            
+            var radarResetJob = new RadarResetJob
+            {
+                deltaTime = Time.fixedDeltaTime
+            };
+            var radarResetJobHandle = radarResetJob.Schedule(this, raycastCommandHandle);
+            radarResetJobHandle.Complete();
+            
+            
+            radarBuffer.Dispose();
+            enemyBuffer.Dispose();
+            distanceBuffer.Dispose();
+            raycastsBuffer.Dispose();
+            hitsBuffer.Dispose();
+            
+            return inputDeps;
+        }
+
+        
+
+        
+
+        [RequireSubtractiveComponent(typeof(Dead))]
+        struct RadarIncrementJob : IJobForEachWithEntity<Radar>
+        {
+            public float deltaTime;
+            
+            public void Execute(Entity entity, int index, ref Radar c0)
+            {
+                c0.Time += deltaTime;
+            }
+        }
+        
+        [RequireSubtractiveComponent(typeof(Dead))]
+        struct RadarScanJob : IJobForEachWithEntity<Radar, Position, Rotation, Faction>
+        {
+            [DeallocateOnJobCompletion][ReadOnly]public NativeArray<Entity> EnemyEntity;
+            [DeallocateOnJobCompletion][ReadOnly]public NativeArray<Faction> EnemyFaction;
+            [DeallocateOnJobCompletion][ReadOnly]public NativeArray<Position> EnemyPosition;
+            
+            [NativeDisableParallelForRestriction]public NativeArray<Entity> RadarEntityBuffer;
+            [NativeDisableParallelForRestriction]public NativeArray<Entity> EnemyEntityBuffer;
+            [NativeDisableParallelForRestriction]public NativeArray<float> DistancesBuffer;
+            [NativeDisableParallelForRestriction]public NativeArray<RaycastCommand> RaycastsBuffer;
+
+            public void Execute(Entity entity, int index, ref Radar radar, ref Position position, ref Rotation rotation, ref Faction faction)
+            {
+                if(radar.Time < radar.Rate)
+                    return;
+
+                for (int i = 0, x = Min(index, EnemyEntity.Length); i < EnemyEntity.Length; i++, x++)
+                {
+                    Debug.Log(x);
+                    //ignore same faction
+                    if(faction.Value == EnemyFaction[i].Value)
+                        continue;
+                    
+                    //ignore self
+                    if (entity.Equals(EnemyEntity[i]))
+                        continue;
+                    
+                    //Pump data into raycast buffer
+                    var up = new float3(0,1,0);
+                    var from = position.Value + up * 1.75f;
+                    var to = EnemyPosition[i].Value + up * 1.75f;
+                    var distance = math.distance(from, to);
+                    var direction = EnemyPosition[i].Value - position.Value;
+                    var fwd = math.forward(rotation.Value);
+                    var dot = math.dot(fwd, math.normalize(direction));
+                    if (dot < -0.1) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                        continue;
+                    
+                    
+                    return;
+                    //fill the buffers
+                    RadarEntityBuffer[x] = entity;
+                    EnemyEntityBuffer[x] = EnemyEntity[i];
+                    DistancesBuffer[x] = distance;
+                    RaycastsBuffer[x] = new RaycastCommand(from, direction, 100, GameLayers.MASK_GROUND);
+
+                }
+                
+            }
+
+            public int Min(int index, int EnemyEntityLength)
+            {
+                var max = (index + 1) * EnemyEntityLength;
+                var min = max - EnemyEntityLength;
+                if (min < 0)
+                    min = 0;
+
+                return min;
+            }
+            
+        }
+        
+        
+        [RequireSubtractiveComponent(typeof(Dead))]
+        struct RadarResetJob : IJobForEachWithEntity<Radar>
+        {
+            public float deltaTime;
+            
+            public void Execute(Entity entity, int index, ref Radar c0)
+            {
+                if (c0.Time > c0.Rate)
+                    c0.Time = 0;
+            }
+        }
+        
+        
+        struct VisibilityJob : IJobParallelFor
+        {
+            //[ReadOnly] public NativeArray<Entity> VisibilityEntity;
+            [ReadOnly] public NativeArray<Position> VisibilityPosition;
+            [ReadOnly] public NativeArray<TargetInfo> OldTarget;
+            [WriteOnly][NativeDisableParallelForRestriction]  public NativeArray<TargetInfo> NewTarget;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Entity> EnemyEntity;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Health> EnemyHealth;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Position> EnemyPosition;
+            [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<float> Distance;
+            [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<RaycastCommand> Raycasts;
+            
+            public void Execute(int index)
+            {
+                for (int i = 0; i < EnemyEntity.Length; i++)
+                {
+                    if (EnemyEntity[i].Equals(OldTarget[index].Entity))
+                    {
+                        //Pump data into raycast buffer
+                        var up = new float3(0,1,0);
+                        var from = VisibilityPosition[index].Value + up * 1.75f;
+                        var to = EnemyPosition[i].Value + up * 1.75f;
+                        var dist = math.distance(from, to);
+                        var dir = from - to;
+                        dir = math.normalize(dir);
+                        Distance[index] = dist;
+                        Raycasts[index] = new RaycastCommand(from, dir, 100, GameLayers.MASK_GROUND);
+                        NewTarget[index] = new TargetInfo 
+                        {
+                            Entity = OldTarget[index].Entity,
+                            Position = to,
+                            Health = EnemyHealth[i].Value,
+                            Visible = true
+                        };
+                        //EnemyHealth[index] = 
+                    }
+                }
+            }
+        }
+        
+        struct VisibilityResultsJob : IJobParallelFor
+        {
+            [ReadOnly] public NativeArray<TargetInfo> NewTarget;
+            [ReadOnly] public EntityCommandBuffer.Concurrent CommandBuffer;
+            [ReadOnly] public NativeArray<RaycastHit> Hits;
+            [ReadOnly] public NativeArray<float> Distance;
+            [ReadOnly] public NativeArray<Entity> VisibilityEntity;
+            //[ReadOnly] public NativeArray<Position> Position;
+            [ReadOnly] public NativeArray<TargetInfo> Target;
+            [NativeDisableParallelForRestriction] public NativeArray<Entity> EnemyEntity;
+            [NativeDisableParallelForRestriction] public NativeArray<Health> EnemyHealth;
+            [NativeDisableParallelForRestriction] public NativeArray<Position> EnemyPosition;
+            
+            public void Execute(int index)
+            {
+                var entity = VisibilityEntity[index];
+                var targetEntity = Target[index].Entity;
+                var visible = false;
+                var targetPos = Target[index].Position;
+                var targetHealth = Target[index].Health;
+                var target = Target[index];
+                var newtarget = NewTarget[index];
+                
+                for (int i = 0; i < EnemyEntity.Length; i++)
+                {
+                    if (targetEntity.Equals(EnemyEntity[i]))
+                    {
+                        // diameter of the capsule, note this wont work if the system ever needs to handle non human sized capsules but
+                        // hopefully ecs will support colliders by the time we need to address this
+                        var minDist = Distance[index] - 0.65f;
+                    
+                        //we hit something that isnt the target
+                        if(Hits[index].distance <= minDist && Hits[index].normal != Vector3.zero)
+                            continue;
+                    
+                        //have visibility greater or equal to the target distance
+                        if (Hits[index].distance >= minDist || Hits[index].distance == 0)
+                        {
+                            target = NewTarget[index];
+                            break;
+                        }
+                    }
+                }
+
+                CommandBuffer.SetComponent(index, entity, target);
+            }
+        }
+    }
+}
+

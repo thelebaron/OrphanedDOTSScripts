@@ -1,0 +1,208 @@
+using Game.Components;
+using Game.Components.Player;
+using Game.Modules.Monsters;
+using Game.Utils;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Modules.Characters
+{
+    [UpdateInGroup(typeof(AiGroup))]
+    public class BaseCharacterSystem : ComponentSystem
+    {
+        protected EntityQuery m_Characters;
+        protected EntityQuery m_DyingCharacters;
+        protected ComponentDataFromEntity<Translation> TranslationData;
+        protected ComponentDataFromEntity<LocalToWorld> LocalToWorldData;
+        protected ComponentDataFromEntity<BoundsCenter> ActorCenterData;
+        protected BufferFromEntity<DamageHistory> DamageHistoryBuffer;
+        protected Entity entityPlayer;
+        protected Unity.Mathematics.Random Rand = new Unity.Mathematics.Random(12345);
+        
+        protected override void OnCreate()
+        {
+            m_Characters = GetEntityQuery(
+                ComponentType.ReadWrite<Actor>(), 
+                ComponentType.ReadWrite<EntTick>(),
+                ComponentType.ReadWrite<TargetData>(),
+                ComponentType.ReadWrite<Health>(),
+                ComponentType.ReadWrite<DamageHistory>(),
+                ComponentType.ReadOnly<Rotation>(),
+                ComponentType.ReadWrite<Translation>(), 
+                ComponentType.ReadOnly<LocalToWorld>(),
+                ComponentType.ReadWrite<Character>(),
+                ComponentType.Exclude<Dead>()
+            );
+            
+            m_DyingCharacters = GetEntityQuery(
+                ComponentType.ReadWrite<Dying>(), 
+                typeof(Character), 
+                typeof(TargetData), 
+                typeof(PhysicsCollider), 
+                typeof(EntTick));
+            
+        }
+        
+        protected override void OnUpdate()
+        {
+            TranslationData  = GetComponentDataFromEntity<Translation>();
+            LocalToWorldData = GetComponentDataFromEntity<LocalToWorld>();
+            ActorCenterData  = GetComponentDataFromEntity<BoundsCenter>();
+            //var dDamageHistoryBuffer = EntityManager.GetBuffer<DamageHistory>();
+            //var lookup = GetBufferFromEntity<EcsIntElement>();
+            //var buffer = lookup[myEntity];
+            
+            if(HasSingleton<PlayerTag>())
+                entityPlayer = GetSingletonEntity<PlayerTag>();
+            // Kill off characters that have need to die;
+            Entities.With(m_DyingCharacters).ForEach((Entity entity, Character character) =>
+            {
+                DestroyComponents(character);
+                PostUpdateCommands.RemoveComponent<PhysicsCollider>(entity);
+                PostUpdateCommands.RemoveComponent<PhysicsVelocity>(entity);
+                PostUpdateCommands.RemoveComponent<EntTick>(entity);
+            });
+            
+            Entities.With(m_Characters).ForEach((Entity entity, Character character, ref Actor actor, ref EntTick think, ref TargetData target, ref Translation translation) =>
+            {
+                character.targetVisible = target.Visible;
+                
+                DoAudio(character);
+                //var buffer = EntityManager.GetBuffer<DamageHistory>(entity);
+                TryReactToDamage(character, ref actor, ref target);
+                
+                TryMovement(character,ref translation, ref target);
+                
+                TryIdle(entity, character, ref think, ref target);
+
+                TryAttack(entity, character, ref think, ref target);
+
+            });
+
+        }
+
+
+
+        protected void SetAngry(Entity entity, Character character)
+        {
+            if (character.lastDamageTakenFromAttacker >= character.switchTargetThreshhold && !character.lastDamagerEntity.Equals(Entity.Null))
+            {
+                var position = character.transform.position;
+                //PostUpdateCommands.SetComponent(entity, new Target{ Value = character.lastDamagerEntity, Position = position });
+                //null this out so we aren't setting it constantly
+                character.lastDamagerEntity = Entity.Null;
+                character.lastDamageTakenFromAttacker = 0;
+
+            }
+        }
+
+        protected bool ReachedDestination(Character c) 
+        {
+            if (c.agent.remainingDistance < c.agent.stoppingDistance)
+            {
+                //_behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = b };
+                return true;
+            }
+    
+            return false;
+        }
+
+        /// <summary>
+        /// Movement params
+        /// </summary>
+        public void RotateTowardsTarget(TargetData targetData, Character character)
+        {
+            if (!LocalToWorldData.Exists(targetData.TargetEntity)) 
+                return;
+            float3 pos            = character.transform.position;
+            var targetPosition = LocalToWorldData[targetData.TargetEntity].Position;
+            var dir            = targetPosition - pos;
+            
+            character.agent.ResetPath();
+            
+            dir.y = 0;
+            Quaternion rotation = quaternion.identity;
+            if (!dir.Equals(float3.zero))
+                rotation = quaternion.LookRotation(dir,  maths.up);
+            
+            var turnSpeed = character.movingTurnSpeed * 0.01f;
+            character.transform.rotation = Quaternion.Slerp(character.transform.rotation, rotation, turnSpeed * UnityEngine.Time.fixedDeltaTime);  
+        }
+        
+        public void SetDestination(Character character, Vector3 point)
+        {
+            character.agent.destination = point;
+        }
+        
+        public void ResetPath(Character character)
+        {
+            character.agent.ResetPath();
+        }
+        
+        
+        public bool FacingIdeal(quaternion rot, Vector3 pos, Vector3 targetPos)
+        {
+            var     fwd = math.forward(rot);
+            Vector3 dir = targetPos - pos;
+            var     dot = Vector3.Dot(fwd, dir.normalized);
+
+            if (dot > -0.1)
+                return true;
+            
+            return false;
+        }
+        
+        public void DestroyComponents(Character character)
+        {
+            character.deathAudio.Play(character.audioSource);
+            character.groundedMixer.Weight = 0;
+            character.shootState.Weight = 0;
+            character.painState.Weight = 0;
+            character.painState.Stop();
+            character.shootState.Stop();
+            character.groundedMixer.Stop();
+            character.animancer.CrossFadeFromStart(character.deathState, 0);
+            //character.deathState.SetWeight(1);
+            //Util.SetKinematic(character.transform, false);
+            Object.Destroy(character.agent);
+            //Object.Destroy(character.animator);
+            //Object.Destroy(character.animancer);
+        }
+
+        protected virtual void TryMovement(Character character, ref Translation translation, ref TargetData targetData)
+        {
+            
+        }
+
+        protected virtual void TryAttack(Entity entity, Character character, ref EntTick think, ref TargetData targetData)
+        {
+            
+        }
+
+        protected virtual void TryIdle(Entity entity, Character character, ref EntTick think, ref TargetData targetData)
+        {
+            
+        }
+
+        protected virtual void TryReactToDamage(Character character, ref Actor actor, ref TargetData targetData)
+        {
+            
+        }
+
+        protected virtual void DoAudio(Character character)
+        {
+            if (character.isHostile && !character.didHostileSound)
+            {
+                character.sightAudio.Play(character.audioSource);
+                character.didHostileSound = true;
+            }
+
+            // reset audio
+            if (!character.isHostile)
+                character.didHostileSound = false;
+        }
+    }
+}

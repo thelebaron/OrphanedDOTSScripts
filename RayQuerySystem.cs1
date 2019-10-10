@@ -1,0 +1,229 @@
+﻿
+using Core;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+namespace Game.Systems
+{
+	[DisableAutoCreation]
+	public class RayQuerySystem : ComponentSystem
+	{
+		public struct Query
+		{
+			public float3 origin;
+			public float3 direction;
+			public float distance;
+
+			public int testAgainsEnvironment;
+			public int mask;
+		}
+
+		public struct Result
+		{
+			public int hit;
+			public Entity hitCollisionOwner;
+			public Collider collider;
+			public float3 hitPoint;
+			public float3 hitNormal;
+		}
+
+		private const int c_bufferSize = 64;
+
+		Query[] m_queries = new Query[c_bufferSize];
+		Result[] m_results = new Result[c_bufferSize];
+		bool[] m_resultReady = new bool[c_bufferSize];
+
+		int m_nextRequestId;
+		int m_lastHandledRequestId = -1;
+
+		readonly RaycastHit[] raycastHitBuffer = new RaycastHit[128];
+		readonly int m_defaultLayer;
+
+		readonly int m_detailLayer;
+
+		//readonly int m_teamAreaALayer;
+		//readonly int m_teamAreaBLayer;
+		readonly int m_environmentMask;
+		readonly int m_hitCollisionLayer;
+
+		/*
+		public RaySphereQueryReciever(GameWorld world) : base(world) 
+		{
+			m_defaultLayer = LayerMask.NameToLayer("Default");
+			m_detailLayer = LayerMask.NameToLayer("collision_detail");
+			m_teamAreaALayer = LayerMask.NameToLayer("TeamAreaA");
+			m_teamAreaBLayer = LayerMask.NameToLayer("TeamAreaB");
+			m_hitCollisionLayer = LayerMask.NameToLayer("hitcollision_enabled");
+			m_environmentMask = 1 << m_defaultLayer | 1 << m_detailLayer | 1 << m_teamAreaALayer | 1 << m_teamAreaBLayer;
+		}*/
+
+		public int RegisterQuery(Query query)
+		{
+			var requestId = m_nextRequestId;
+			var index     = requestId % c_bufferSize;
+
+			m_queries[index] = query;
+			m_nextRequestId++;
+
+			var requestCount = m_nextRequestId - m_lastHandledRequestId - 1;
+			if (requestCount >= 10)
+				HandleRequests();
+
+			return requestId;
+		}
+
+		public void GetResult(int requestId, out Query query, out Result result)
+		{
+//		GameDebug.Log("Get result id:" + requestId);
+
+			var index = requestId % c_bufferSize;
+
+			// Result not ready so we need to handle requests
+			if (!m_resultReady[index])
+			{
+				HandleRequests();
+			}
+
+			query  = m_queries[index];
+			result = m_results[index];
+
+			m_resultReady[index] = false;
+		}
+
+		void HandleRequests()
+		{
+			var startId = m_lastHandledRequestId + 1;
+			var endId   = m_nextRequestId        - 1;
+			var count   = endId - startId        + 1;
+
+			var queries = new Query[count];
+			var results = new Result[count];
+
+			var bufferIndex = 0;
+			for (var id = startId; id <= endId; id++)
+			{
+				var index = id % c_bufferSize;
+				queries[bufferIndex] = m_queries[index];
+				bufferIndex++;
+			}
+
+			HandleRequests(count, queries, results, m_environmentMask, m_hitCollisionLayer, raycastHitBuffer);
+
+			bufferIndex = 0;
+			for (var id = startId; id <= endId; id++)
+			{
+				var index = id % c_bufferSize;
+				m_results[index] = results[bufferIndex];
+
+				/*
+				if (m_results[index].collider != null && m_results[index].collider.transform.parent != null)
+				{
+					var collider = m_results[index].collider;
+					var hitCollision = collider.GetComponent<HitCollision>();
+					if (hitCollision != null)
+					{
+						m_results[index].hitCollisionOwner = hitCollision.owner.GetComponent<GameObjectEntity>().Entity;
+					}
+				}*/
+
+				m_resultReady[index] = true;
+				bufferIndex++;
+			}
+
+			m_lastHandledRequestId = endId;
+		}
+
+
+		static void HandleRequests(int queryCount,        Query[]      queries, Result[] results, int environmentMask,
+			int                        hitCollisionLayer, RaycastHit[] raycastHitBuffer)
+		{
+			// First perform collision test against environment.New endpoint (if environment collision is found) is 
+			// used when testing agains hitcollision. If no hitcollision found damage will be applied to environment
+			var rayTestCount = 0;
+			for (var i = 0; i < queryCount; i++)
+			{
+				var query = queries[i];
+				if (query.testAgainsEnvironment == 0)
+					continue;
+				rayTestCount++;
+			}
+
+			var rayCommands = new NativeArray<RaycastCommand>(rayTestCount, Allocator.TempJob);
+			var rayResults  = new NativeArray<RaycastHit>(rayTestCount, Allocator.TempJob);
+
+			var rayTestIndex = 0;
+
+			for (var i = 0; i < queryCount; i++)
+			{
+				var query = queries[i];
+				if (query.testAgainsEnvironment == 0)
+					continue;
+
+				rayCommands[rayTestIndex] = new RaycastCommand(query.origin, query.direction, query.distance,
+					GameLayers.MASK_GROUND);
+
+				rayTestIndex++;
+			}
+
+			var handle = RaycastCommand.ScheduleBatch(rayCommands, rayResults, 10);
+			handle.Complete();
+
+			// Test collision with hitCollision
+			rayTestIndex = 0;
+			for (var i = 0; i < queryCount; i++)
+			{
+				var query = queries[i];
+
+				// Handle raytest result
+				var      environmentHit      = false;
+				var      environmentPoint    = Vector3.zero;
+				var      environmentNormal   = Vector3.zero;
+				Collider environmentCollider = null;
+
+				if (query.testAgainsEnvironment == 1)
+				{
+					environmentCollider = rayResults[rayTestIndex].collider;
+					var impact = environmentCollider != null;
+					if (impact)
+					{
+						environmentHit    = true;
+						environmentPoint  = rayResults[rayTestIndex].point;
+						environmentNormal = rayResults[rayTestIndex].normal;
+
+						// query distance is adjusted so followup tests only are done before environment hit point 
+						query.distance = rayResults[rayTestIndex].distance;
+
+
+						rayTestIndex++;
+					}
+
+					var result = new Result();
+
+					// If no hitCollision found we use environment hit results
+					if (result.hit == 0 && environmentHit)
+					{
+						result.hit       = 1;
+						result.hitPoint  = environmentPoint;
+						result.hitNormal = environmentNormal;
+						result.collider  = environmentCollider;
+					}
+
+					// Flag result as ready
+					results[i] = result;
+				}
+
+				rayCommands.Dispose();
+				rayResults.Dispose();
+			}
+		}
+
+
+
+		protected override void OnUpdate()
+		{
+		}
+	}
+}
+

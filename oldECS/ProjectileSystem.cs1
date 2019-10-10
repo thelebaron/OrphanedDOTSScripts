@@ -1,0 +1,288 @@
+
+using Game.Components;
+using Game.Modules.Ballistics;
+using Game.Modules.Damage;
+using Game.Modules.Decals;
+using Game.Modules.HitCollision;
+using Game.Systems;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Physics.Systems;
+using Unity.Transforms;
+using UnityEngine;
+using Random = UnityEngine.Random;
+using Ray = Unity.Physics.Ray;
+using RaycastHit = Unity.Physics.RaycastHit;
+
+namespace Game.Modules.Projectile
+{
+    public class ProjectileSystem : JobComponentSystem
+    {
+        private EndSimulationEntityCommandBufferSystem endSimulationEntityCommandBufferSystem;
+        private EntityQuery projectilesQuery;
+        private EmitterSystem emitterSystem;
+        private BuildPhysicsWorld buildPhysicsWorldSystem;
+        private StepPhysicsWorld stepPhysicsWorld;
+        private ExportPhysicsWorld exportPhysicsWorld;
+        
+        protected override void OnCreate()
+        {
+            projectilesQuery = GetEntityQuery(
+                ComponentType.ReadWrite<Ballistics.Projectile>(),  
+                ComponentType.ReadOnly<Rotation>(),
+                ComponentType.ReadWrite<Translation>(), 
+                ComponentType.ReadOnly<LocalToWorld>()
+                );
+            endSimulationEntityCommandBufferSystem = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+            emitterSystem = World.Active.GetOrCreateSystem<EmitterSystem>();
+            
+            buildPhysicsWorldSystem = World.Active.GetOrCreateSystem<BuildPhysicsWorld>();
+            stepPhysicsWorld = World.Active.GetOrCreateSystem<StepPhysicsWorld>();
+            exportPhysicsWorld = World.Active.GetOrCreateSystem<ExportPhysicsWorld>();
+        }
+
+        //[BurstCompile]
+        struct RaycastJob : IJobChunk
+        {
+            [ReadOnly] public EntityCommandBuffer.Concurrent                CommandBuffer;
+            [ReadOnly] public ArchetypeChunkEntityType                      EntityType;
+            public            ArchetypeChunkComponentType<Rotation>         RotationType;
+            public            ArchetypeChunkComponentType<Translation>      TranslationType;
+            [ReadOnly] public ArchetypeChunkComponentType<LocalToWorld>     LocalToWorldType;
+            public            ArchetypeChunkComponentType<Ballistics.Projectile>       ProjectileType;
+            [ReadOnly] public ArchetypeChunkComponentType<FilterCollisions> FilterCollisionsType;
+            [ReadOnly] public float          dt;
+            [ReadOnly] public CollisionWorld CollisionWorld;
+            [ReadOnly] public int NumDynamicBodies;
+            [ReadOnly] public BufferFromEntity<DamageInstance> DamageEventBuffer;
+            [ReadOnly] public BufferFromEntity<DamageHistory> DamageHistoryBuffer;
+            [ReadOnly] public ComponentDataFromEntity<ProjectileImpactDecal> ImpactDecalData;
+            [ReadOnly] public ComponentDataFromEntity<ProjectileImpactSpark> ImpactSparkData;
+            [ReadOnly] public ComponentDataFromEntity<Instigator> InstigatorData;
+            [ReadOnly] public float Time;
+
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                // 1.0) get weapon group chunk
+                var chunkEntity = chunk.GetNativeArray(EntityType);
+                var chunkTranslations = chunk.GetNativeArray(TranslationType);
+                var chunkRotations = chunk.GetNativeArray(RotationType);
+                var chunkLocalToWorld = chunk.GetNativeArray(LocalToWorldType);
+                var chunkProjectiles    = chunk.GetNativeArray(ProjectileType);
+                var chunkFilters = chunk.GetNativeArray(FilterCollisionsType);
+
+                for (int index = 0; index < chunkEntity.Length; index++)
+                {
+                    var entity       = chunkEntity[index];
+                    var projectile   = chunkProjectiles[index];
+                    var translation  = chunkTranslations[index];
+                    var rotation     = chunkRotations[index];
+                    var localToWorld = chunkLocalToWorld[index];
+                    var filter       = chunkFilters[index];
+
+                    var forward = math.normalize(math.forward(rotation.Value));//localToWorld.Forward;
+                    var oldPos = translation.Value;
+                    var newMovement = dt * projectile.MuzzleVelocity * math.forward(rotation.Value);//math.normalize(forward));
+                    translation.Value += newMovement;
+                    var magnitude = math.length(newMovement);
+                    var previousPos = magnitude * -forward; //translation.Value + dt * projectile.Speed * -forward;
+                    var dist = math.distance(translation.Value, oldPos);
+                    //Debug.Log("projectile" + translation.Value);
+                    projectile.TimeToLive -= dt;
+
+                    chunkProjectiles[index] = projectile;
+                    chunkTranslations[index] = translation;
+
+                    //Debug.Log("previous distance - "+ dist);
+                    //Debug.Log(dt * projectile.Speed * math.normalize(forward));
+                    //Debug.Log("mag "+ magnitude);
+                        
+                    
+                    if (projectile.TimeToLive <= 0)
+                    {
+                        CommandBuffer.DestroyEntity(firstEntityIndex, entity);
+                        continue;
+                    }
+
+                    var rayInput = new RaycastInput();
+                    rayInput.Start = translation.Value; // localToWorld.Position; //note maybe we cant use localtoworld as it takes a frame to register translation so it always registers as 0,0,0 on the first frame?
+                    //rayInput.Ray.Origin = translation.Value;// localToWorld.Position; //note maybe we cant use localtoworld as it takes a frame to register translation so it always registers as 0,0,0 on the first frame?
+                    //rayInput.End = math.forward(rotation.Value)  * dist * 1;
+                    rayInput.End = translation.Value + math.normalize(math.forward(rotation.Value)* dist );
+                    //rayInput.Ray.Direction = math.forward(rotation.Value)  * dist * 1;
+                    //Debug.Log("projectile dist " + dist);
+                    //Debug.Log("ray distance - "+ math.length(rayInput.Ray.Direction));
+                    rayInput.Filter        = filter.Value;
+                
+                    //Debug.Log( "origin" +rayInput.Ray.Origin);
+                    //Debug.Log( "dir" +rayInput.Ray.Direction);
+                    bool hit = CollisionWorld.CastRay(rayInput, out var rayHit);
+                    
+                    if(rayHit.RigidBodyIndex == -1)
+                        return;
+                    
+                    if (hit)
+                    {
+                        
+                        
+                        Entity e = CollisionWorld.Bodies[rayHit.RigidBodyIndex].Entity;
+                        RigidBody? hitBody = CollisionWorld.Bodies[rayHit.RigidBodyIndex];
+                        
+                        if(rayHit.RigidBodyIndex <= 0)
+                            return;
+                            
+                        
+                        var hitEntity = hitBody.Value.Entity;
+                        
+                        
+                        
+                        var instigator = Entity.Null;
+                        if(DamageHistoryBuffer.Exists(e))
+                        {
+                            if (InstigatorData.Exists(entity))
+                            {
+                                instigator = InstigatorData[entity].Value;
+                                //Debug.Log(instigator);
+                            }
+                            
+                            DamageHistoryBuffer[e].Add(new DamageHistory
+                            {
+                                TimeOccured     = Time,
+                                TookDamage      = true,
+                                Damage          = projectile.damageInstance.damage,
+                                Instigator      = instigator,
+                                lastDamageInstance = projectile.damageInstance
+                            });
+                        }
+                        
+                        if (DamageEventBuffer.Exists(e))
+                        {
+                            var damageEvent = projectile.damageInstance;
+                            if (InstigatorData.Exists(entity))
+                            {
+                                damageEvent.instigator = InstigatorData[entity].Value;
+                            }
+                            
+                            DamageEventBuffer[e].Add(damageEvent);
+                        }
+                        
+                        if (ImpactDecalData.Exists(entity))
+                        {
+                            var decalRequestEntity = CommandBuffer.CreateEntity(firstEntityIndex);
+                            CommandBuffer.AddComponent(firstEntityIndex, decalRequestEntity, new DecalRequest
+                            {
+                                PrefabEntity = ImpactDecalData[entity].Prefab,
+                                Target       = e,
+                                Hit          = rayHit,
+                                Position     = rayHit.Position + rayHit.SurfaceNormal * 0.1f,
+                                Rotation     = quaternion.Euler(rayHit.SurfaceNormal),
+                                DecalType    = DecalType.BulletMark
+                            });
+                            
+                            if (ImpactSparkData.Exists(entity))
+                            {
+                                for (int i = 0; i < 9; i++)
+                                {
+                                    var sparkMuzzleEntity = CommandBuffer.Instantiate(firstEntityIndex, ImpactSparkData[entity].Prefab);
+                                    CommandBuffer.SetComponent(firstEntityIndex, sparkMuzzleEntity, new Translation{ Value = rayHit.Position + rayHit.SurfaceNormal * 0.1f });
+                                }
+                            }
+                        }
+                        
+                        //Debug.Log("projectile destroy" + projectile.TimeToLive);
+                        CommandBuffer.DestroyEntity(firstEntityIndex, entity);
+                    }
+                    
+                    
+                    //wrap up
+                }
+            }
+        }
+        
+        protected override JobHandle OnUpdate(JobHandle deps)
+        {
+            var physicsHandleA = JobHandle.CombineDependencies(deps, buildPhysicsWorldSystem.FinalJobHandle);
+            var physicsHandleB = JobHandle.CombineDependencies(physicsHandleA, stepPhysicsWorld.FinalJobHandle, exportPhysicsWorld.FinalJobHandle);
+
+            var entityType = GetArchetypeChunkEntityType();
+            var projectileType = GetArchetypeChunkComponentType<Ballistics.Projectile>();
+            var translationType = GetArchetypeChunkComponentType<Translation>();
+            var rotationType = GetArchetypeChunkComponentType<Rotation>();
+            var localToWorldType = GetArchetypeChunkComponentType<LocalToWorld>(true);
+            var filterType = GetArchetypeChunkComponentType<FilterCollisions>(true);
+
+            //var dArchetypeChunkBufferType = GetArchetypeChunkBufferType<DamageEvent>();
+            var raycastJob = new RaycastJob
+            {
+                Time = Time.time,
+                CommandBuffer        = endSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent(),
+                EntityType           = entityType,
+                TranslationType      = translationType,
+                RotationType         = rotationType,
+                LocalToWorldType     = localToWorldType,
+                ProjectileType       = projectileType,
+                FilterCollisionsType = filterType,
+                dt                   = Time.fixedDeltaTime,
+                CollisionWorld       = buildPhysicsWorldSystem.PhysicsWorld.CollisionWorld,
+                NumDynamicBodies     = buildPhysicsWorldSystem.PhysicsWorld.NumDynamicBodies,
+                DamageEventBuffer    = GetBufferFromEntity<DamageInstance>(),
+                DamageHistoryBuffer = GetBufferFromEntity<DamageHistory>(),
+                ImpactDecalData = GetComponentDataFromEntity<ProjectileImpactDecal>(true),
+                ImpactSparkData = GetComponentDataFromEntity<ProjectileImpactSpark>(true),
+                InstigatorData = GetComponentDataFromEntity<Instigator>(true)
+            };
+            //var raycastHandle= raycastJob.Schedule(projectilesQuery, physicsHandleB);
+            var raycastHandle = JobChunkExtensions.Schedule(raycastJob, projectilesQuery, physicsHandleB);
+            raycastHandle.Complete();
+            
+            endSimulationEntityCommandBufferSystem.AddJobHandleForProducer(raycastHandle);
+            
+            return raycastHandle;
+        }
+        
+       
+        public void Damage(Transform obj, DamageInstance de, Vector3 hitpoint)
+        {
+            Debug.DrawRay(obj.position, Vector3.up, Color.red);
+
+            var pos = hitpoint;
+            //refactor
+            var hit = obj.GetComponent<HitCollisionRef>();
+            if (hit != null)
+            {
+                hit.damageEvents.Add(de);
+                
+                //if (hit.gameObject.layer == GameLayers.LAYER_GROUND || hit.gameObject.layer == GameLayers.LAYER_OBJECTS)
+                //if (hit.gameObject.layer == GameLayers.LAYER_NPCPARTS)
+                /*
+                if (hit.surfaceType == HitCollisionRef.SurfaceType.FLESH)
+                {
+                    
+                    //Debug.Log("spawnstuff");
+                    emitter.Emit(pos, 1, ParticleType.SmallGibs);
+                    emitter.Emit(pos, 2, ParticleType.ShreddedFlesh);
+                    emitter.Emit(pos, 1, ParticleType.SmallDebris);
+                }*/
+
+                emitterSystem.Emit(pos, 1, ParticleType.SmallGibs);
+                emitterSystem.Emit(pos, 2, ParticleType.ShreddedFlesh);
+                emitterSystem.Emit(pos, 2, ParticleType.BloodSprayTrails);
+            }
+            else
+            {
+                emitterSystem.Emit(pos, Random.Range(1,2), ParticleType.Embers);
+                emitterSystem.Emit(pos, 2, ParticleType.SmallDebris);
+                emitterSystem.Emit(pos, 1, ParticleType.BulletImpactSparks);
+            }
+            
+            
+        }
+
+
+
+    }
+}

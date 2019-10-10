@@ -1,0 +1,259 @@
+
+/*
+using System;
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Systems
+{
+    [UpdateAfter(typeof(OldSearchSystem))]
+    public class SearchBarrier : BarrierSystem
+    { }
+    
+    public class OldSearchSystem : JobComponentSystem
+    {
+        private SearchBarrier barrier;
+        private ComponentGroup searchGroup;
+        private ComponentGroup targetGroup;
+     
+        protected override void OnCreateManager() 
+        {
+            barrier = World.Active.GetOrCreateManager<SearchBarrier>();
+            
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Search), typeof(Position),typeof(Rotation), typeof(SearchQuery), typeof(TargetInfo) },
+                None = new ComponentType[]{ typeof(Dead), typeof(HasTargetTag) },  //typeof(CurrentTarget),
+            };
+            searchGroup =  GetEntityQuery(query);
+            
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(TargetableTag), typeof(Position), typeof(Health) },
+                //None =  new ComponentType[]{ typeof(Dead) }
+            };
+            targetGroup =  GetEntityQuery(query);
+            
+        }
+        
+        struct SearchJob : IJobChunk
+        {
+            public float deltaTime;
+            [ReadOnly] public ArchetypeChunkEntityType EntityType;
+            public ArchetypeChunkComponentType<Search> SearchType;
+            public ArchetypeChunkComponentType<Position> PositionType;
+            public ArchetypeChunkComponentType<Rotation> RotationType;
+            public ArchetypeChunkComponentType<Faction> FactionType;
+            public ArchetypeChunkComponentType<SearchQuery> TraceQueryType;
+            public ArchetypeChunkComponentType<Health> HealthType;
+            public ArchetypeChunkComponentType<TargetInfo> TargetInfoType;
+
+            [DeallocateOnJobCompletion] [NativeDisableParallelForRestriction] 
+            public NativeArray<ArchetypeChunk> targetChunks;
+            
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                //get all nativearrays
+                var entities = chunk.GetNativeArray(EntityType);
+                var searches = chunk.GetNativeArray(SearchType);
+                var positions = chunk.GetNativeArray(PositionType);
+                var rotations = chunk.GetNativeArray(RotationType);
+                var factions = chunk.GetNativeArray(FactionType);
+                var traces = chunk.GetNativeArray(TraceQueryType);
+                var targetinfos = chunk.GetNativeArray(TargetInfoType);
+                var instanceCount = chunk.Count;
+                
+                for (int c = 0; c < instanceCount; c++)
+                {
+                    //increment the time between searches
+                    if (searches[c].NextSearchTime < searches[c].Rate)
+                        searches[c] = new Search { NextSearchTime = searches[c].NextSearchTime + deltaTime }; 
+                    
+                    //ignore if there is already a pending target
+                    if(!targetinfos[c].Entity.Equals(Entity.Null))
+                        continue;
+                    
+                    //skip this entity if search hasn't exceeded the rate
+                    if (searches[c].NextSearchTime < searches[c].Rate)
+                        continue;
+                    
+                    //reset to 0 if we have the go ahead to search this iteration
+                    if (searches[c].NextSearchTime >= searches[c].Rate)
+                        searches[c] = new Search { Rate = searches[c].Rate, NextSearchTime = 0 };
+                    
+                    //iterate through all target group chunks
+                    foreach (var target in targetChunks)
+                    {
+                        var TARGET_ENTITY = target.GetNativeArray(EntityType);
+                        var TARGET_FACTION = target.GetNativeArray(FactionType);
+                        var TARGET_POSITION = target.GetNativeArray(PositionType);
+                        var TARGET_HEALTH = target.GetNativeArray(HealthType);
+                        var targetInstanceCount = target.Count;
+                        
+                        for (int t = 0; t < targetInstanceCount; t++)
+                        {
+                            //ignore same entity
+                            if (TARGET_ENTITY[t].Equals(entities[c]))
+                                continue;
+                            
+                            //ignore same faction
+                            //if(TARGET_FACTION[t].Equals(factions[chunkIndex]))
+                                //continue;
+                                
+                            float3 up = new float3(0,1,0);
+                            var origin = positions[c].Value + (up * 1.75f);
+                            var otherPos = TARGET_POSITION[t].Value + (up * 1.75f);
+                            var dir = origin - otherPos;
+                            var dist = math.distance(origin, otherPos);
+                            
+                            var fwd = math.forward(rotations[c].Value);
+                            var dot = math.dot(fwd, math.normalize(dir));
+                            if (dot < 0.3) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                                continue;
+                            
+                            traces[c] = new SearchQuery
+                            {
+                                Ready = true,
+                                ActualDistance = dist,
+                                Entity = TARGET_ENTITY[t],
+                                Position = TARGET_POSITION[t].Value,
+                                Health = TARGET_HEALTH[t].Value,
+                                Origin = origin,
+                                Direction = dir,
+                                Distance = 100,
+                                Mask = GameLayers.MASK_GROUND
+                            };
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        struct PackRaycastsJob : IJobParallelFor
+        {
+            [NativeDisableParallelForRestriction] public NativeArray<RaycastCommand> RaycastCommand;
+            [NativeDisableParallelForRestriction] public NativeArray<SearchQuery> TraceQueries;
+
+            public void Execute(int index)
+            {
+                
+                RaycastCommand[index] = new RaycastCommand(TraceQueries[index].Origin, TraceQueries[index].Direction, 100, GameLayers.MASK_GROUND);
+                
+            }
+        }
+        
+        struct ResultsJob : IJobForEachWithEntity<SearchResults>
+        {
+            public EntityCommandBuffer.Concurrent Commands;
+            [NativeDisableParallelForRestriction]public NativeArray<RaycastHit> RaycastHits;
+            [NativeDisableParallelForRestriction]public NativeArray<SearchQuery> TraceQueries;
+            [NativeDisableParallelForRestriction]public NativeArray<Rotation> Rotations;
+            [NativeDisableParallelForRestriction]public NativeArray<Entity> entities;
+
+            public void Execute(Entity entity, int jobindex, ref SearchResults target)
+            {
+                
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    if (entity.Equals(entities[i]))
+                    {
+                        var minDist = TraceQueries[i].ActualDistance - 0.25f;
+                        var ent = TraceQueries[i].Entity;
+                        
+                        // ReSharper disable once CompareOfFloatsByEqualityOperator
+                        if (RaycastHits[i].distance >= minDist || RaycastHits[i].distance == 0)
+                        {
+                            target.Entity = TraceQueries[i].Entity;
+                        }
+                        else
+                        {
+                            target.Entity = Entity.Null;
+                            //Commands.SetComponent<TargetInfo>(jobindex, entities[i], new TargetInfo());
+                            
+                            
+                        }
+                        //Commands.AddComponent<SearchResults>(jobindex, entities[i], new SearchResults { Entity = ent });
+                        //Commands.RemoveComponent<Search>(jobindex, entities[i]);
+
+                    }
+                }
+            }
+        }
+        
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            
+            
+            //job 1
+            var traces = searchGroup.ToComponentDataArray<SearchQuery>(Allocator.TempJob);
+            var raycastCommands = new NativeArray<RaycastCommand>(traces.Length, Allocator.TempJob);
+            var raycastHits = new NativeArray<RaycastHit>(traces.Length, Allocator.TempJob);
+            var g = searchGroup.ToComponentDataArray<Rotation>(Allocator.TempJob);
+            var f = searchGroup.ToEntityArray(Allocator.TempJob);
+            
+            NativeArray<ArchetypeChunk> targetchunks = targetGroup.CreateArchetypeChunkArray(Allocator.TempJob);
+            var searchJob = new SearchJob
+            {
+                deltaTime = Time.deltaTime,
+                EntityType = GetArchetypeChunkEntityType(),
+                SearchType = GetArchetypeChunkComponentType<Search>(),
+                PositionType = GetArchetypeChunkComponentType<Position>(),
+                RotationType = GetArchetypeChunkComponentType<Rotation>(),
+                FactionType = GetArchetypeChunkComponentType<Faction>(),
+                TraceQueryType = GetArchetypeChunkComponentType<SearchQuery>(),
+                HealthType = GetArchetypeChunkComponentType<Health>(),
+                TargetInfoType =  GetArchetypeChunkComponentType<TargetInfo>(),
+                
+                targetChunks = targetchunks
+            };
+            var searchHandle = searchJob.Schedule(searchGroup, inputDeps);
+            //job 2
+            
+            var packRaycastsJob = new PackRaycastsJob
+            {
+                RaycastCommand = raycastCommands,
+                TraceQueries = traces
+            };
+            
+            var packHandle = packRaycastsJob.Schedule(traces.Length,32,  searchHandle); ////////////////////////////////////////////////
+            
+            var raycastHandle = RaycastCommand.ScheduleBatch(raycastCommands, raycastHits, 32, packHandle);
+            
+            //job 3
+            var resultsJob = new ResultsJob
+            {
+                Commands = barrier.CreateCommandBuffer().ToConcurrent(),
+                RaycastHits = raycastHits,
+                TraceQueries = traces,
+                Rotations = g,
+                entities = f
+            };
+            var resultsHandle = resultsJob.Schedule(this, raycastHandle);
+            resultsHandle.Complete();
+
+            for (int i = 0; i < raycastHits.Length; i++)
+            {
+                Debug.Log(raycastHits[i].collider);
+                //Debug.Log(raycastHits[i].distance);
+                //Debug.Log(traces[i].ActualDistance);
+                //Debug.Log(raycastCommands[i].from);
+                //Debug.Log(raycastCommands[i].direction);
+                //Debug.Log(raycastCommands[i].distance);
+            }
+            
+            raycastCommands.Dispose();
+            traces.Dispose();
+            raycastHits.Dispose();
+            g.Dispose();
+            f.Dispose();
+            return inputDeps;
+        }
+    }
+}*/

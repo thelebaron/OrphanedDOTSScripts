@@ -1,0 +1,187 @@
+
+using Game.Components;
+using Game.Systems;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Systems.Tests
+{
+    public struct TestHashData : IComponentData
+    {
+        
+    }
+    
+    public class TestHashmapSystem : JobComponentSystem
+    {
+        public ComponentGroup testGroup;
+        
+        [BurstCompile]
+        struct job : IJobNativeMultiHashMapMergedSharedKeyIndices
+        {
+            
+
+            public void ExecuteFirst(int index)
+            {
+                //throw new System.NotImplementedException();
+                
+            }
+
+            public void ExecuteNext(int firstIndex, int index)
+            {
+                //throw new System.NotImplementedException();
+            }
+        }
+
+        // OnUpdate runs on the main thread.
+        protected override JobHandle OnUpdate(JobHandle inputDependencies)
+        {
+
+            TestGetNatives();
+            
+            
+            return inputDependencies;
+
+            //var j = new job();
+
+            //return j.Schedule(this, inputDependencies);
+        }
+
+        void TestGetNatives()
+        {
+
+            var myEntity = new Entity
+            {
+                Index = 25,
+                Version = 2
+            };
+            var listKey = new NativeList<Entity>(Allocator.TempJob);
+            var listValue = new NativeList<RaycastCommand>(Allocator.TempJob);
+            
+            listKey.Add(myEntity);
+            listValue.Add( new RaycastCommand(Vector3.up, Vector3.down, 69));
+            
+            Debug.Log(listKey[0].Index);
+            Debug.Log(listValue[0].distance);
+            
+            listKey.Dispose();
+            listValue.Dispose();
+            /*
+            //var hashEnt = Hash(myEntity.Index, myEntity.Version);
+            var hashMap = new NativeMultiHashMap<Entity, RaycastCommand>(3, Allocator.TempJob);
+            hashMap.Add(myEntity,new RaycastCommand( Vector3.one, Vector3.forward, 1));
+            hashMap.Add(myEntity,new RaycastCommand( Vector3.one, Vector3.forward, 2));
+            hashMap.Add(myEntity,new RaycastCommand( Vector3.one, Vector3.forward, 3));
+
+            //var r = hashMap.SetValue(new RaycastCommand(), myEntity.Index);
+            
+            //if (hm.TryGetValue(Entity.Null, out var ray)) ;
+            //hashMap.Dispose();
+            */
+            /*
+             
+             //nativehashmap
+            Debug.Log(myEntity.Index);
+            myEntity.Index = 3;
+            var hm = new NativeHashMap<Entity, RaycastCommand>(1, Allocator.TempJob);
+            
+            hm.TryAdd(myEntity, new RaycastCommand( Vector3.one, Vector3.forward, 1));
+            hm.TryAdd(myEntity, new RaycastCommand( Vector3.one, Vector3.forward, 2));
+            hm.TryAdd(myEntity, new RaycastCommand( Vector3.one, Vector3.forward, 3));
+            hm.TryAdd(myEntity, new RaycastCommand( Vector3.one, Vector3.forward, 4));
+            hm.TryAdd(myEntity, new RaycastCommand( Vector3.one, Vector3.forward, 5));
+
+            var ray = hm[myEntity];
+            Debug.Log(ray.from);
+            Debug.Log(ray.direction);
+            Debug.Log(ray.distance);
+
+            var nullEntity = Entity.Null;
+            
+            
+            Debug.Log(nullEntity.Index);
+            
+            var array = hm.GetKeyArray(Allocator.TempJob);
+            
+            
+            
+            
+            
+            hm.Dispose();
+            */
+            
+        }
+
+        struct MergeHashMap : IJobNativeMultiHashMapMergedSharedKeyIndices
+        {
+            
+            
+            public void ExecuteFirst(int index)
+            {
+                throw new System.NotImplementedException();
+            }
+
+            public void ExecuteNext(int firstIndex, int index)
+            {
+                throw new System.NotImplementedException();
+            }
+        }
+
+
+        public static int Hash(float x, float y)
+        {
+            return Hash(Quantize(x,y));
+        }
+
+
+
+        public static int2 Quantize(float v, float z)
+        {
+            return new int2(math.floor(v / z));
+        }
+        
+            
+        public static int Hash(int2 grid)
+        {
+            unchecked
+            {
+                // Simple int3 hash based on a pseudo mix of :
+                // 1) https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+                // 2) https://en.wikipedia.org/wiki/Jenkins_hash_function
+                int hash = grid.x;
+                hash = (hash * 397) ^ grid.y;
+                hash += hash << 3;
+                hash ^= hash >> 11;
+                hash += hash << 15;
+                return hash;
+            }
+        }
+
+        public static ulong Hash(ulong hash, ulong key)
+        {
+            const ulong m = 0xc6a4a7935bd1e995UL;
+            const int r = 47;
+
+            ulong h = hash;
+            ulong k = key;
+
+            k *= m;
+            k ^= k >> r;
+            k *= m;
+
+            h ^= k;
+            h *= m;
+
+            h ^= h >> r;
+            h *= m;
+            h ^= h >> r;
+
+            return h;
+        }
+    }
+}
+

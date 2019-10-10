@@ -1,0 +1,94 @@
+using Game.Components;
+using Player;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Transforms;
+
+namespace Game.Systems
+{
+    //[UpdateAfter(typeof(PickupHealthSystem))]
+    //public class PickupHealthBarrier : EntityCommandBufferSystem{ }
+    
+    //[UpdateAfter(typeof(HandleDamageRefSystem))]
+    public class PickupHealthSystem : ComponentSystem
+    {
+        private EndSimulationEntityCommandBufferSystem m_Barrier;
+        private EntityQuery m_PickupGroup;
+        private EntityQuery m_Player;
+        //private EntityCommandBuffer commandBuffer;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            m_Barrier = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+            
+            m_PickupGroup = GetEntityQuery( typeof(HealthPickupBootstrap),typeof(HealthPickup));
+            
+            m_Player = GetEntityQuery(
+                ComponentType.ReadOnly(typeof(FPController)), ComponentType.Create<Health>(), ComponentType.ReadOnly(typeof(Translation)));
+            
+            //commandBuffer = m_Barrier.CreateCommandBuffer();
+        }
+
+        protected override void OnUpdate()
+        {
+            var playerHealth = m_Player.GetComponentDataArray<Health>();
+            var length = m_PickupGroup.CalculateLength();
+            var pickupEntity = m_PickupGroup.GetEntityArray();
+            var healthBootstraps = m_PickupGroup.GetComponentArray<HealthPickupBootstrap>();
+            var healthToAddToPlayer = new NativeArray<int>(length, Allocator.TempJob);
+
+            for (int i = 0; i < length; i++)
+            {
+                if (healthBootstraps[i].consumed)
+                {
+                    healthToAddToPlayer[i] = healthBootstraps[i].pickupAmount;
+                    healthBootstraps[i].Execute();
+                }
+            }
+
+            int total = 0;
+            for (int i = 0; i < length; i++)
+            {
+                total += healthToAddToPlayer[i];
+            }
+            
+            playerHealth[0] = new Health
+            {
+                Value = playerHealth[0].Value + total,
+                Max = playerHealth[0].Max 
+            };
+            
+            var queueDestroyjob = new QueueDestroyPickups
+            {
+                entities = pickupEntity,
+                destroyArray = healthToAddToPlayer,
+                commandBuffer = m_Barrier.CreateCommandBuffer()
+            };
+            var finalhandle = queueDestroyjob.Schedule();
+            
+            finalhandle.Complete();
+            
+            healthToAddToPlayer.Dispose();
+        }
+
+        struct QueueDestroyPickups : IJob
+        {
+            public EntityArray entities;
+            public NativeArray<int> destroyArray;
+            public EntityCommandBuffer commandBuffer;
+            
+            public void Execute()
+            {
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    if(destroyArray[i]>0)
+                        commandBuffer.DestroyEntity(entities[i]);
+                }
+                
+            }
+        }
+        
+    }
+}

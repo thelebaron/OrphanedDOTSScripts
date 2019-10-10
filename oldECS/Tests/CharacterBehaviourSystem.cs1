@@ -1,0 +1,366 @@
+using System;
+using Animancer;
+using Game.Components;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using UnityEngine.AI;
+using Zeal;
+using Behaviour = Game.Components.Behaviour;
+using Random = UnityEngine.Random;
+
+// ReSharper disable InconsistentNaming
+
+namespace Game.Systems
+{
+    //Overrides movement system for rotation(i hope)
+    [UpdateAfter(typeof(MovementSystem))]
+    public class CharacterBehaviourSystem : ComponentSystem
+    {
+        
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            
+            GroupAlive = GetEntityQuery(
+                ComponentType.Create<Behaviour>(),ComponentType.Create<Pain>(),ComponentType.Create<TargetInfo>(),
+                ComponentType.Subtractive<Dead>(),
+                ComponentType.ReadOnly<Health>(),ComponentType.ReadOnly<Rotation>(),ComponentType.ReadOnly<Position>(),ComponentType.ReadOnly<NavMeshAgent>(),
+                typeof(Character),typeof(Movement),typeof(CharacterAnimationSet),typeof(CharacterSounds),typeof(AnimancerController));
+            GroupDying = GetEntityQuery(typeof(Behaviour),ComponentType.Create<Dying>(),ComponentType.Create<Dead>(),typeof(Health),typeof(Character));
+            
+        }
+
+        protected float deltatime;
+        
+        protected ComponentGroup GroupAlive;
+        protected ComponentGroup GroupDying;
+        protected ComponentArray<Character> _character;
+        protected ComponentArray<NavMeshAgent> _navagent;
+        protected ComponentDataArray<Behaviour> _behaviour;
+        protected ComponentDataArray<TargetInfo> _target;
+        protected ComponentDataArray<Health> _health;
+        protected ComponentArray<Movement> _movement;
+        protected ComponentDataArray<Rotation> _rotation;
+        protected ComponentDataArray<Position> _position;
+        protected ComponentArray<CharacterAnimationSet> _animset;
+        protected ComponentArray<AnimancerController> _animcontroller;
+        protected ComponentArray<CharacterSounds> _charSounds;
+        protected ComponentDataArray<Pain> _pain;
+        protected float time;
+        protected EntityArray _entity;
+
+        protected override void OnUpdate()
+        {
+            return;
+            
+            deltatime = Time.deltaTime;
+            time = Time.time;
+
+            _entity = GroupAlive.GetEntityArray();
+            _character = GroupAlive.GetComponentArray<Character>();
+            _navagent = GroupAlive.GetComponentArray<NavMeshAgent>();
+            _movement = GroupAlive.GetComponentArray<Movement>();
+            _rotation = GroupAlive.GetComponentDataArray<Rotation>();
+            _position = GroupAlive.GetComponentDataArray<Position>();
+            _behaviour = GroupAlive.GetComponentDataArray<Behaviour>();
+            _health = GroupAlive.GetComponentDataArray<Health>();
+            _target = GroupAlive.GetComponentDataArray<TargetInfo>();
+            _animset = GroupAlive.GetComponentArray<CharacterAnimationSet>();
+            _animcontroller = GroupAlive.GetComponentArray<AnimancerController>();
+            _charSounds = GroupAlive.GetComponentArray<CharacterSounds>();
+            _pain = GroupAlive.GetComponentDataArray<Pain>();
+            
+            for (int i = 0; i != _behaviour.Length; i++)
+            {
+                _character[i].behaviourTime -= deltatime;
+                //_character[i].currentBehaviour = _behaviour[i].Value; 
+                
+                switch (_behaviour[i].Value)
+                {
+                    case Be.Idle:
+                        
+                        if (!_target[i].Entity.Equals(Entity.Null))
+                        {
+                            _behaviour[i] =  new Behaviour { Value = Be.Shooting, PreviousValue = Be.Idle }; //why shooting? 1/11/2019
+                        }
+                        
+                        if(_animset[i].shootState.IsPlaying)
+                            _animset[i].shootState.Stop();
+                        
+                        if(!_animset[i].grounded_blend.IsPlaying)
+                            _animcontroller[i].CrossFade(_animset[i].grounded_blend , 0);
+                        
+                        _animset[i].grounded_blend.Parameter = _movement[i].forwardamount * 1;
+                        
+                        if (_character[i].behaviourTime <= 0 || ReachedDestination(i, _behaviour[i].Value))
+                        {
+                            _behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = Be.Idle };
+                            continue;
+                        }
+                        continue;
+                    
+                    case Be.Shooting:
+                        
+                        if (_target[i].Entity.Equals(Entity.Null))
+                        {
+                            _behaviour[i] =  new Behaviour { Value = Be.Idle, PreviousValue = Be.Shooting };
+                            continue;
+                        }
+
+                        _navagent[i].ResetPath();
+
+                        _movement[i].blockMovement = 4;
+                        _movement[i].isStopped = true;
+                        _movement[i].RotateTowardsTarget(_target[i].Position);
+                        Debug.DrawRay(_movement[i].transform.position,_movement[i].transform.forward, Color.black);
+                            
+                        if(FacingIdeal(_rotation[i], _position[i], _target[i]))
+                            _animcontroller[i].CrossFade(_animset[i].shootState, 0.2f);
+
+                        if (_character[i].behaviourTime <= 0)
+                        {
+                            _behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = Be.Shooting };
+                            continue;
+                        }
+                        
+                        continue;
+                    
+                    case Be.Strafe:
+                        
+                        ///////////character[i].heading = Utilities.RandomHeading(characters.data[i].transform);
+                        
+                        if(_target[i].Entity.Equals(Entity.Null))
+                            _behaviour[i] =  new Behaviour { Value = Be.Idle};
+                        
+                        
+                        if (_character[i].behaviourTime > 0 && _behaviour[i].Value == Be.Strafe)
+                        {
+                            _movement[i].isStopped = false;
+                            
+                            
+                            if(ReachedDestination(i, _behaviour[i].Value))
+                                continue;
+                            
+                            /*
+                            if (_navagent[i].remainingDistance < _navagent[i].stoppingDistance)
+                            {
+                                _behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = Be.Strafe };
+                                continue;
+                            }*/
+                            
+                            
+                            
+                            //if(math.distance(position[i].Value, target[i].position) > 2)
+                                //movement[i].ManualMove(character[i].heading);
+                            
+                            //if(math.distance(position[i].Value, target[i].position) < 1)
+                                //movement[i].SetDestination(-character[i].heading * 3);
+                            
+                            _animcontroller[i].CrossFade(_animset[i].grounded_blend, 0.2f);
+                            _animset[i].grounded_blend.Parameter = _movement[i].forwardamount * 2;
+                        }
+
+                        if (_character[i].behaviourTime <= 0)
+                        {
+                            _behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = Be.Strafe };
+                            continue;
+                        }
+                        
+                        continue;
+                    
+                    case Be.Pain:
+                    {
+                        _behaviour[i] =  new Behaviour { Value = Be.Pain, PreviousValue = Be.Pain };
+                        
+                        if (_animset[i].painFinished)
+                        {
+                            //animGroup[i].painState.Stop();
+                            _animcontroller[i].CrossFade(_animset[i].grounded_blend, 0.2f);
+                            _movement[i].isStopped = false;
+                            _animset[i].painFinished = false;
+                            _behaviour[i] = new Behaviour { Value = Be.Reevaluate, PreviousValue = Be.Pain };
+                            continue;
+                        }
+                        
+                        if(_pain[i].Finished > time)
+                            continue;
+
+                        _pain[i] = new Pain {Finished = time + 1.35f};
+                        _animcontroller[i].CrossFade(_animset[i].painState, 0.2f);
+                        _movement[i].isStopped = true;
+                        _charSounds[i].PlayPain();
+                        
+                        
+                        if(!_health[i].lastDamager.Equals(Entity.Null))
+                            PostUpdateCommands.SetComponent(_entity[i], new TargetInfo
+                            {
+                                Entity = _health[i].lastDamager,
+                                Health = 1,
+                            });
+                        
+                        continue;
+                        
+                    }
+                    
+                    case Be.Dying:
+                        
+                        _behaviour[i] =  new Behaviour { Value = Be.Dead, PreviousValue = Be.Dead};
+                        continue;
+                    
+                    case Be.Reevaluate:
+                        
+                        //set a randomtime
+                        _character[i].behaviourTime = 1 * Random.Range(0.5f, 3f);
+                        var random = Utilities.randomFloat();
+                        
+                        
+                        if (_target[i].Entity.Equals(Entity.Null))
+                        {
+                            _character[i].behaviourTime = 10; 
+                            
+                            var randomPos = _character[i].transform.position;
+                            randomPos += Random.insideUnitSphere * Random.Range(7, 15);
+                            
+                            if(_character[i].canWander)
+                                _movement[i].SetDestination(randomPos);
+                            
+                            _behaviour[i] =  new Behaviour { Value = Be.Idle, PreviousValue = Be.Reevaluate };
+                            continue;
+                        }
+                        
+                        
+                        if (_behaviour[i].PreviousValue == Be.Shooting || _behaviour[i].PreviousValue == Be.Pain)
+                        {
+                            
+                            
+                            if (random >= 0.0f && random < 0.5f)
+                            {
+                                _behaviour[i] =  new Behaviour { Value = Be.Shooting, PreviousValue = Be.Reevaluate };
+                                continue;
+                            }
+                            
+                            if (random >= 0.5f && random < 0.6f)
+                            {
+                                var randomAngle = Random.Range(0, 6);
+                                var radius = 2f * Random.Range(1.25f, 3f);
+                                var pos = _target[i].Position;
+                                var dir = Quaternion.identity;
+                                var angle = 45;
+		        
+                                angle *= randomAngle;
+                                dir = quaternion.AxisAngle(Vector3.up, angle);
+                                var fwd = math.forward(dir);
+                                fwd = math.normalize(fwd);
+
+                                _movement[i].SetDestination(pos + fwd * radius);
+                                
+                                _behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                                continue;
+                            }
+                            
+                            //
+                            if (random >= 0.6f && random < 0.8f)
+                            {
+                                var randomNegative = Random.Range(-1, 1);
+                                var radius = 2f * Random.Range(1.25f, 3f);
+                                var pos = _character[i].transform.position;
+                                var dir = Quaternion.identity;
+                                var angle = 90 * randomNegative;
+                                dir = quaternion.AxisAngle(Vector3.up, angle);
+                                var fwd = math.forward(dir);
+                                fwd = math.normalize(fwd);
+
+                                _movement[i].SetDestination(pos + (Vector3)fwd * radius);
+                                
+                                _behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                                continue;
+                            }
+                            
+                            
+                            //short side strafe, for now this turns and faces the direction but todo replace with strafe anim and aim weapon
+                            if (random >= 0.8f)
+                            {
+                                var dir = _movement[i].transform.right;
+                                if (!Utilities.rbool())
+                                    dir = -dir;
+
+                                var dest = _movement[i].transform.position + dir.normalized * 1.5f;
+                                _movement[i].SetDestination(dest);
+                                
+                                _behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                                continue;
+                            }
+                            
+
+                            
+                            
+                        }
+                        
+                        if (_behaviour[i].PreviousValue == Be.Strafe || _behaviour[i].PreviousValue == Be.Pain)
+                        {
+                            _character[i].behaviourTime = 1 * Random.Range(0.75f, 2f);
+                            _character[i].behaviourTime *= 2;
+                            
+                            _behaviour[i] =  new Behaviour { Value = Be.Shooting, PreviousValue = Be.Reevaluate };
+                            continue;
+                        }
+                        
+                        continue;
+                    
+                    
+                    default:
+                        continue;
+                }
+
+            }
+   
+            
+            
+            
+            
+            
+            
+            // Kill off characters that have need to die;
+            var charactersKillOff = GroupDying.GetComponentArray<Character>();
+            var entitiesDead = GroupDying.GetEntityArray();
+            for (int j = 0; j != charactersKillOff.Length; j++)
+            {
+                charactersKillOff[j].DestroyComponents();
+                PostUpdateCommands.RemoveComponent<Dying>(entitiesDead[j]);
+            }
+            
+            
+            
+         
+        }
+
+
+
+        public bool FacingIdeal(Rotation rot, Position pos, TargetInfo targetInfo)
+        {
+            var fwd = math.forward(rot.Value);
+            Vector3 dir = targetInfo.Position - pos.Value;
+            var dot = Vector3.Dot(fwd, dir.normalized);
+
+            if (dot > -0.1)
+                return true;
+            
+            return false;
+        }
+
+
+
+        protected bool ReachedDestination(int i, Be b)
+        {
+            if (_navagent[i].remainingDistance < _navagent[i].stoppingDistance)
+            {
+                _behaviour[i] =  new Behaviour { Value = Be.Reevaluate, PreviousValue = b };
+                return true;
+            }
+
+            return false;
+        }
+    }
+}

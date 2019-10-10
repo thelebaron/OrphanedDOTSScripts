@@ -1,0 +1,29 @@
+using Core;
+using Game.Components;
+using Player;
+using Unity.Entities;
+
+namespace Game.Systems.PlayerSystems
+{
+    public class SynchronisePlayerHealthSystem : ComponentSystem
+    {
+        private EntityQuery m_Group;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            m_Group = GetEntityQuery(ComponentType.ReadOnly<Health>(), ComponentType.Create<PlayerHealth>());
+        }
+
+        protected override void OnUpdate()
+        {
+            var health = m_Group.GetComponentDataArray<Health>();
+            var playerhealth = m_Group.GetComponentArray<PlayerHealth>();
+
+            if(playerhealth[0].godMode || playerhealth[0].deadFlag || Cheats.God)
+                    return;
+            
+            playerhealth[0].currentHealth = health[0].Value;
+        }
+    }
+}

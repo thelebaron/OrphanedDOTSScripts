@@ -1,0 +1,53 @@
+using Animancer;
+using Game.Components;
+using Unity.Entities;
+using Unity.Transforms;
+using UnityEngine.AI;
+/*
+namespace Game.Systems.Characters
+{
+    public class CharacterTargetManager : ComponentSystem
+    {
+        private ComponentGroup AddTargetGroup;
+        private ComponentGroup RemoveTargetGroup;
+        
+        protected override void OnCreateManager()
+        {
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Character) },
+                None = new ComponentType[]{ typeof(Dead), typeof(HasTargetTag)},
+            };
+            
+            AddTargetGroup = GetEntityQuery(query);
+            
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(HasTargetTag), typeof(Character) },
+                None = new ComponentType[]{ typeof(Dead)},
+            };
+            
+            RemoveTargetGroup = GetEntityQuery(query);
+        }
+
+        protected override void OnUpdate()
+        {
+            ForEach((Entity entity, ref Think think, Character character) =>
+            {
+                if (character.Target.Count > 0)
+                {
+                    PostUpdateCommands.AddComponent(entity, new HasTargetTag());
+                }
+                
+            }, AddTargetGroup);
+            
+            ForEach((Entity entity, ref Think think, Character character) =>
+            {
+                if (character.Target.Count <= 0)
+                {
+                    PostUpdateCommands.RemoveComponent<HasTargetTag>(entity);
+                }
+                
+            }, RemoveTargetGroup);
+    }
+}*/

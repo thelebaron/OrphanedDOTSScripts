@@ -1,0 +1,49 @@
+namespace Game.Systems.Tests
+{
+        using Unity.Entities;
+        using Unity.Burst;
+        using Unity.Jobs;
+        using UnityEngine;
+
+        public struct InputData : IComponentData
+        {
+            public float Horizontal;
+            public float Vertical;
+        }
+
+        public class InputSystem : JobComponentSystem 
+        {
+            [BurstCompile]
+            struct InputJob: IJobForEach<InputData> 
+            {
+                public float horizontalAxis;
+                public float verticalAxis;
+
+                public void Execute(ref InputData inputData) {
+                    inputData.Horizontal = horizontalAxis;
+                    inputData.Vertical   = verticalAxis;
+                }
+            }
+
+            protected override JobHandle OnUpdate(JobHandle inputDeps) 
+            {
+                Debug.Log(Input.GetAxis("Horizontal"));
+                
+                InputJob job = new InputJob() {
+                    horizontalAxis = Input.GetAxis("Horizontal"),
+                    verticalAxis   = Input.GetAxis("Vertical")
+                };
+
+                return job.Schedule(this, inputDeps);
+            }
+        }
+
+        public class InputDataTestProxy : MonoBehaviour, IConvertGameObjectToEntity
+        {
+            public void Convert(Entity entity, EntityManager dstManager, GameObjectConversionSystem conversionSystem)
+            {
+                dstManager.AddComponentData(entity, new InputData());
+            }
+        }
+
+}

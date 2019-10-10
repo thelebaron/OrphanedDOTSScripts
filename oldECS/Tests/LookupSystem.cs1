@@ -1,0 +1,75 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEditor;
+using UnityEngine;
+
+namespace Game.Systems.Utility
+{
+    public class LookupSystem : ComponentSystem
+    {
+        /*
+        ComponentGroup _componentGroup;
+        
+        protected override void OnCreate()
+        {
+            _componentGroup = GetEntityQuery(new EntityQueryDesc
+            {
+                Any  = Array.Empty<ComponentType>(),
+                None = Array.Empty<ComponentType>(),
+                All  = new ComponentType[] { typeof(Transform) }
+            });
+        }
+        
+        protected override void OnUpdate()
+        {
+            var chunks = _componentGroup.CreateArchetypeChunkArray(Allocator.TempJob);
+            if (chunks.Length == 0)
+            {
+                chunks.Dispose();
+                return;
+            }
+     
+            var entityTypeRO = GetArchetypeChunkEntityType();
+     
+     
+            for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+            {
+                var chunk = chunks[chunkIndex];
+                var entities  = chunk.GetNativeArray(entityTypeRO);
+     
+     
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    Transform controller = EntityManager.GetComponentObject<Transform>(entities[i]);
+                }
+            }
+     
+            chunks.Dispose();
+    
+        }
+    */
+
+        public GameObject Lookup(Entity ent)
+        {
+            return EntityManager.GetComponentObject<Transform>(ent).gameObject;
+        }
+
+        public Entity LookupEnt(GameObject go)
+        {
+            //return EntityManager.HasComponent<>();
+
+            return Entity.Null;
+        }
+
+        protected override void OnUpdate()
+        {
+
+        }
+    }
+}

@@ -1,0 +1,307 @@
+using Game.Components;
+using Game.ComponentTags;
+using Game.Modules.Damage;
+using Game.Utils;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Physics.Systems;
+using Unity.Transforms;
+using UnityEngine;
+
+
+namespace Game.Modules.Characters
+{
+    [UpdateInGroup(typeof(AiGroup))]
+    public class TargetingSystem : JobComponentSystem
+    {
+        private BuildPhysicsWorld m_BuildPhysicsWorldSystem;
+        private EntityQuery m_seekGroup;
+        private EntityQuery m_targetGroup;
+        private EntityQuery m_deadGroup;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+
+            m_BuildPhysicsWorldSystem = World.GetOrCreateSystem<BuildPhysicsWorld>();
+            
+            m_seekGroup = GetEntityQuery(new EntityQueryDesc
+            {
+                All  = new ComponentType[]{ 
+                    ComponentType.ReadWrite<TargetData>(),
+                    ComponentType.ReadWrite<DamageHistory>(),
+                    ComponentType.ReadOnly<Faction>(),
+                    ComponentType.ReadOnly<LocalToWorld>(),
+                    ComponentType.ReadOnly<Rotation>(),
+                    ComponentType.ReadOnly<Health>(),
+                    ComponentType.ReadOnly<Targetable>(),
+                    ComponentType.ReadOnly<PhysicsCollider>() 
+                },
+                    
+                None = new ComponentType[]
+                {
+                    typeof(Dead) 
+                    
+                }
+            });
+
+            m_targetGroup = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new ComponentType[]{ 
+                    ComponentType.ReadWrite<Targetable>(),
+                    ComponentType.ReadOnly<LocalToWorld>(),
+                    ComponentType.ReadOnly<Faction>(),
+                    ComponentType.ReadOnly<Health>() },
+                None = new ComponentType[]{ typeof(Dead) }
+            });
+            
+            
+
+            m_deadGroup = GetEntityQuery(
+                ComponentType.ReadWrite<Targetable>(),
+                ComponentType.ReadOnly<Dead>(),
+                ComponentType.ReadOnly<Health>()
+            );
+        }
+
+        //[BurstCompile]
+        [RequireComponentTag(typeof(Targetable))]
+        [ExcludeComponent(typeof(Dead))]
+        struct DetectionJob : IJobChunk
+        {
+            [ReadOnly] public                             float                                        dt;
+            [ReadOnly] public                             CollisionWorld                               CollisionWorld;
+            [ReadOnly] public                             int                                          NumDynamicBodies;
+            [ReadOnly] public                             BufferFromEntity<DamageInstance>                DamageEventBuffer;
+            [ReadOnly] public                             ComponentDataFromEntity<Actor>               ActorData;
+            [ReadOnly]                             public ComponentDataFromEntity<LocalToWorld>        LocalToWorldData;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Entity>                          DeadEntity;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Entity>                          TargetEntity;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<LocalToWorld>                    TargetLocal;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Faction>                         TargetFaction;
+            [ReadOnly]                             public ArchetypeChunkEntityType                     EntityType;
+            [ReadOnly]                             public ArchetypeChunkComponentType<Rotation>        RotationType;
+            [ReadOnly]                             public ArchetypeChunkComponentType<Translation>     TranslationType;
+            [ReadOnly]                             public ArchetypeChunkComponentType<LocalToWorld>    LocalToWorldType;
+            public                                        ArchetypeChunkComponentType<TargetData>      CharacterTargetType;
+            [ReadOnly] public                             ArchetypeChunkBufferType<DamageHistory>      DamageHistoryType;
+            [ReadOnly] public                             ArchetypeChunkComponentType<Faction>         FactionType;
+            [ReadOnly] public                             ArchetypeChunkComponentType<PhysicsCollider> PhysicsColliderType;
+
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                var chunkEntity               = chunk.GetNativeArray(EntityType);
+                var chunkTranslations         = chunk.GetNativeArray(TranslationType);
+                var chunkRotations            = chunk.GetNativeArray(RotationType);
+                var chunkLocalToWorlds        = chunk.GetNativeArray(LocalToWorldType);
+                var chunkCharacterTargets     = chunk.GetNativeArray(CharacterTargetType);
+                var chunkDamageHistories      = chunk.GetBufferAccessor(DamageHistoryType);
+                var chunkFactions             = chunk.GetNativeArray(FactionType);
+                var chunkPhysicsColliderTypes = chunk.GetNativeArray(PhysicsColliderType);
+
+
+                for (int index = 0; index < chunkEntity.Length; index++)
+                {
+                    var entity          = chunkEntity[index];
+                    var translation     = chunkTranslations[index];
+                    var rotation        = chunkRotations[index];
+                    var localToWorld    = chunkLocalToWorlds[index];
+                    var characterTarget = chunkCharacterTargets[index];
+                    var damageHistory   = chunkDamageHistories[index];
+                    var faction         = chunkFactions[index];
+                    var collider        = chunkPhysicsColliderTypes[index];
+
+                    for (int d = 0; d < DeadEntity.Length; d++)
+                    {
+                        if (characterTarget.TargetEntity.Equals(DeadEntity[d]))
+                        {
+                            //Debug.Log("ClearDead");
+                            //clear the target data
+                            chunkCharacterTargets[index] = new TargetData();
+                        }
+                    }
+                    
+                    /*
+                    bool gotDamaged = false;
+                    if (ActorData.Exists(entity) && !characterTarget.HasTarget())
+                    {
+                        Debug.Log("setting actordata as target");
+                        var enemy = ActorData[entity].Damager;
+                        if (ActorData[entity].Damaged)
+                        {
+                            Debug.Log("damaged");
+                            var enemyPos = float3.zero;
+                            if (LocalToWorldData.Exists(enemy))
+                                enemyPos = LocalToWorldData[ActorData[entity].Damager].Position;
+                            
+                            chunkCharacterTargets[index] = new TargetData
+                            {
+                                TargetEntity = ActorData[entity].Damager,
+                                Position     = localToWorld.Position,
+                                Visible      = false
+                            };
+                            
+                            gotDamaged = true;
+                        }
+                    }
+                    if(gotDamaged)
+                        return;
+                    */
+                    for (int t = 0; t < TargetEntity.Length; t++)
+                    {
+                        //Debug.Log("FirstEntry");
+                        //ignore friendly
+                        if (faction.IsFriendly(TargetFaction[t].Value))
+                        {
+                            //Debug.Log("IsFriendly");
+                            continue;
+                        }
+                        
+                        //Debug.Log(entity + " to " + TargetEntity[t]);
+                        //if we need a target(and the index is not us)
+                        if (!characterTarget.HasTarget() && !entity.Equals(TargetEntity[t]))
+                        {
+                            var from = translation.Value + maths.up * 0.5f + math.normalize(localToWorld.Forward); //was localToWorld.Position
+                            var to   = TargetLocal[t].Position + maths.up * 0.5f;
+
+                            var direction = TargetLocal[t].Position - localToWorld.Position;
+
+                            var fwd = localToWorld.Forward;
+                            var dot = math.dot(fwd, math.normalize(direction));
+                            if (dot < 0.3) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                                continue;
+
+                            var dist = math.distance(from, to);
+                            if (dist > 25)
+                                continue;
+
+                            var filter = CollisionFilter.Default;
+                            filter.BelongsTo = ~0u << 12;
+                            
+                            var rayInput = new RaycastInput();
+                            rayInput.Start    = from;
+                            rayInput.End = direction;
+                            rayInput.Filter        = CollisionFilter.Default;
+
+                            var hit = CollisionWorld.CastRay(rayInput, out var rayHit);
+                            if(rayHit.RigidBodyIndex == -1)
+                                return;
+                            
+                            if (hit  /*&& rayHit.RigidBodyIndex < NumDynamicBodies*/)
+                            {
+                                Entity     e       = CollisionWorld.Bodies[rayHit.RigidBodyIndex].Entity;
+                                RigidBody? hitBody = CollisionWorld.Bodies[rayHit.RigidBodyIndex];
+                                //Debug.Log("I am: "+ entity +" | Got hit on "+ e + ", checking if matches to "+ TargetEntity[t]);
+
+                                if (e.Equals(TargetEntity[t]))
+                                {
+                                    //Debug.Log("got target");
+                                    chunkCharacterTargets[index] = new TargetData
+                                    {
+                                        TargetEntity    = e,
+                                        Position = TargetLocal[t].Position,
+                                        Visible  = true
+                                    };
+                                }
+                            }
+                        }
+
+                        //if we have a target and it matches whats in the component
+                        if (characterTarget.HasTarget() && characterTarget.TargetEntity.Equals(TargetEntity[t]))
+                        {
+                            var from = translation.Value + maths.up * 0.5f + math.normalize(localToWorld.Forward); //was  localToWorld.Position
+                            var to   = TargetLocal[t].Position + maths.up * 0.5f;
+
+                            var direction = TargetLocal[t].Position - localToWorld.Position;
+
+                            var fwd = localToWorld.Forward;
+                            var dot = math.dot(fwd, math.normalize(direction));
+                            if (dot < 0.3) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                                continue;
+
+                            var dist = math.distance(from, to);
+                            if (dist > 25)
+                                continue;
+
+                            var rayInput = new RaycastInput();
+                            rayInput.Start = from;
+                            rayInput.End = from + math.normalize(direction) * 40;
+                            rayInput.Filter        = collider.Value.Value.Filter;
+
+                            bool hit = CollisionWorld.CastRay(rayInput, out var rayHit);
+                            
+                            if(rayHit.RigidBodyIndex == -1)
+                                return;
+                            
+                            if (hit)
+                            {
+                                Entity     e       = CollisionWorld.Bodies[rayHit.RigidBodyIndex].Entity;
+                                RigidBody? hitBody = CollisionWorld.Bodies[rayHit.RigidBodyIndex];
+
+                                if (e.Equals(TargetEntity[t]))
+                                {
+                                    
+                                    chunkCharacterTargets[index] = new TargetData
+                                    {
+                                        TargetEntity    = e,
+                                        Position = TargetLocal[t].Position,
+                                        Visible  = true
+                                    };
+                                }
+                            }
+
+                            if (!hit)
+                            {
+                                characterTarget.Visible      = false;
+                                chunkCharacterTargets[index] = characterTarget;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            //initialize some types
+            var entityType = GetArchetypeChunkEntityType();
+            var rotationType = GetArchetypeChunkComponentType<Rotation>(true);
+            var translationType = GetArchetypeChunkComponentType<Translation>(true);
+            var localToWorldType = GetArchetypeChunkComponentType<LocalToWorld>(true);
+            var characterTargetType = GetArchetypeChunkComponentType<TargetData>();
+            var damageHistoryType = GetArchetypeChunkBufferType<DamageHistory>(true);
+            var factionType = GetArchetypeChunkComponentType<Faction>(true);
+            var physicsColliderType = GetArchetypeChunkComponentType<PhysicsCollider>(true);
+            
+            var detectionJob = new DetectionJob
+            {
+                dt                  = Time.fixedDeltaTime,
+                CollisionWorld      = m_BuildPhysicsWorldSystem.PhysicsWorld.CollisionWorld,
+                NumDynamicBodies    = m_BuildPhysicsWorldSystem.PhysicsWorld.NumDynamicBodies,
+                DamageEventBuffer   = GetBufferFromEntity<DamageInstance>(),
+                ActorData           = GetComponentDataFromEntity<Actor>(true),
+                LocalToWorldData    = GetComponentDataFromEntity<LocalToWorld>(true),
+                DeadEntity          = m_deadGroup.ToEntityArray(Allocator.TempJob),
+                TargetEntity        = m_targetGroup.ToEntityArray(Allocator.TempJob),
+                TargetLocal         = m_targetGroup.ToComponentDataArray<LocalToWorld>(Allocator.TempJob),
+                TargetFaction       = m_targetGroup.ToComponentDataArray<Faction>(Allocator.TempJob),
+                EntityType          = entityType,
+                RotationType        = rotationType,
+                TranslationType     = translationType,
+                LocalToWorldType    = localToWorldType,
+                CharacterTargetType = characterTargetType,
+                DamageHistoryType   = damageHistoryType,
+                FactionType         = factionType,
+                PhysicsColliderType = physicsColliderType
+            };
+            //var detectionHandle = detectionJob.Schedule(m_seekGroup, inputDeps);
+            var detectionHandle = JobChunkExtensions.Schedule(detectionJob, m_seekGroup, inputDeps);
+
+            return detectionHandle;
+        }
+    }
+}

@@ -1,0 +1,78 @@
+using System.Collections.Generic;
+using Game.ECS;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+using Unity.Transforms;
+using UnityEngine;
+using Random = UnityEngine.Random;
+
+namespace Game.Components
+{
+    public struct Initialised : IComponentData
+    {
+        public bool Value;
+    }
+    
+    
+    public class BootstrapSystem : ComponentSystem
+    {
+        private ComponentGroup player;
+        private ComponentGroup m_hitcollisionGroup;
+        
+        private static EntityArchetype m_healthBarArchetype;
+        private bool m_InitialisedHealthBars;
+
+        protected override void OnCreateManager()
+        {
+            player = GetEntityQuery(
+                ComponentType.Exclude<Initialised>(), 
+                ComponentType.ReadWrite<PlayerRepresentation>()
+                );
+
+            
+            m_hitcollisionGroup = GetEntityQuery(
+                ComponentType.Exclude<Initialised>(),
+                ComponentType.ReadWrite<HitCollisionRef>());
+            
+        }
+
+        protected override void OnUpdate()
+        {
+            Entities.With(player).ForEach((Entity entity, PlayerRepresentation player) =>
+            {
+#if UNITY_EDITOR
+                EntityManager.SetName(entity, "Player_" + entity);
+#endif
+
+                player.rootentity = entity;
+                PostUpdateCommands.AddComponent(entity, new CopyTransformFromGameObject());
+                PostUpdateCommands.AddComponent(entity, new Faction
+                {
+                    Value = 2 // player = 2
+                });
+                PostUpdateCommands.AddComponent(entity, new Health
+                {
+                    Value = 100
+                });
+                PostUpdateCommands.AddComponent(entity, new Targetable());
+                PostUpdateCommands.AddComponent(entity, new Player());
+
+                PostUpdateCommands.AddComponent(entity, new Initialised());
+            });
+
+            
+            
+            Entities.With(m_hitcollisionGroup).ForEach((Entity entity, HitCollisionRef hitCollision) =>
+            {
+#if UNITY_EDITOR
+                EntityManager.SetName(entity, "hitCollisionEntity" + entity);
+#endif
+                PostUpdateCommands.AddComponent(entity, new Initialised());
+            });
+
+        }
+
+    }
+}

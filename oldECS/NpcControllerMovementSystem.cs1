@@ -1,0 +1,286 @@
+using Game.Components;
+using Game.Modules;
+using Game.Utils;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Physics;
+using Unity.Physics.Systems;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Systems
+{
+    public struct CharacterMotor : IComponentData
+    {
+        public bool Jump;
+        public bool Run;
+        public bool Crouch;
+        public float2 InputMoveVector;
+        public float Yaw;
+    }    
+    public struct AiTag : IComponentData
+    {
+        
+    }
+    
+    [UpdateInGroup(typeof(AiGroup))]
+    public class NpcControllerMovementSystem : JobComponentSystem
+    {
+        private BuildPhysicsWorld m_BuildPhysicsWorld;
+        private PhysicsWorld m_PhysicsWorld;
+        private EntityQuery m_CharacterControllers;
+        private int m_PlayerRigidbodyIdx;
+
+        protected override void OnCreate()
+        {
+            m_BuildPhysicsWorld = World.GetOrCreateSystem<BuildPhysicsWorld>();
+            m_PhysicsWorld = m_BuildPhysicsWorld.PhysicsWorld;
+            
+            m_CharacterControllers = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new ComponentType[]
+                {
+                    ComponentType.ReadWrite<ControllerBody>(),
+                    ComponentType.ReadWrite<PhysicsCollider>(),
+                    ComponentType.ReadWrite<PhysicsVelocity>(),
+                    ComponentType.ReadOnly<Translation>(),
+                    ComponentType.ReadOnly<Rotation>(),
+                    ComponentType.ReadOnly<LocalToWorld>(),
+                    ComponentType.ReadOnly<AiTag>()
+                },
+                None = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Dead>(),
+                }
+            });
+        }
+
+        private struct ChunkMovementJob : IJobChunk
+        {
+            [ReadOnly] public ArchetypeChunkEntityType EntityType;
+            public ArchetypeChunkComponentType<CharacterMotor> CharacterMotorType;
+            public ArchetypeChunkComponentType<ControllerBody> ControllerBodyType;
+            public ArchetypeChunkComponentType<PhysicsMass> PhysicsMassType;
+            public ArchetypeChunkComponentType<PhysicsVelocity> PhysicsVelocityType;
+            public ArchetypeChunkComponentType<PhysicsCollider> PhysicsColliderType;
+            public ArchetypeChunkComponentType<LocalToWorld> LocalToWorldType;
+            public ArchetypeChunkComponentType<Translation> TranslationType;
+            public ArchetypeChunkComponentType<Rotation> RotationType;
+            public ArchetypeChunkComponentType<RotationEulerXYZ> RotationEulerXYZType;
+            
+            [ReadOnly] public CollisionWorld CollisionWorld;
+            [ReadOnly] public int NumDynamicBodies;
+            public float FixedDeltaTime;
+            public float TimeScale;
+            
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                var chunkEntity = chunk.GetNativeArray(EntityType);
+                var chunkCharacterMotor = chunk.GetNativeArray(CharacterMotorType);
+                var chunkControllerBody = chunk.GetNativeArray(ControllerBodyType);
+                var chunkPhysicsMass = chunk.GetNativeArray(PhysicsMassType);
+                var chunkPhysicsVelocity = chunk.GetNativeArray(PhysicsVelocityType);
+                var chunkPhysicsCollider = chunk.GetNativeArray(PhysicsColliderType);
+                var chunkLocalToWorld = chunk.GetNativeArray(LocalToWorldType);
+                var chunkTranslation = chunk.GetNativeArray(TranslationType);
+                var chunkRotation = chunk.GetNativeArray(RotationType);
+                var chunkRotationEulerXYZ = chunk.GetNativeArray(RotationEulerXYZType);
+
+                for (int index = 0; index < chunkEntity.Length; index++)
+                {
+                    var entity = chunkEntity[index];
+                    var motor = chunkCharacterMotor[index];
+                    var body = chunkControllerBody[index];
+                    var mass = chunkPhysicsMass[index];
+                    var velocity = chunkPhysicsVelocity[index];
+                    var collider = chunkPhysicsCollider[index];
+                    var localToWorld = chunkLocalToWorld[index];
+                    var translation = chunkTranslation[index];
+                    var rotation = chunkRotation[index];
+                    var rotationEulerXyzxyz = chunkRotationEulerXYZ[index];
+
+                    CheckGrounded(ref body, translation, collider, ref velocity);
+                    
+                    BodyMovement(motor, rotation, ref body);
+                    
+                    SetVelocity(ref velocity, ref body, translation);
+                    
+                    chunkEntity[index] = entity;
+                    chunkCharacterMotor[index] = motor;
+                    chunkControllerBody[index] = body;
+                    chunkPhysicsMass[index] = mass;
+                    chunkPhysicsVelocity[index] = velocity;
+                    chunkPhysicsCollider[index] = collider;
+                    chunkLocalToWorld[index] = localToWorld;
+                    chunkTranslation[index] = translation;
+                    chunkRotation[index] = rotation;
+                    chunkRotationEulerXYZ[index] = rotationEulerXyzxyz;
+                }
+            }
+            
+            // tweak velocity
+            private void SetVelocity(ref PhysicsVelocity velocity, ref ControllerBody body, Translation translation)
+            {
+                var velocityLinear = velocity.Linear;
+                velocityLinear *= body.MovementDamping;
+
+
+                float y = velocityLinear.y;
+                if (body.Grounded)
+                {
+                    velocityLinear = body.MovementSpeed * body.MoveDirection;
+                    velocityLinear.y = y;
+
+                    if (body.IsJumping)
+                    {
+                        velocityLinear.y += body.JumpSpeed * 2;
+                        body.IsJumping = false;
+                    }
+                }
+
+                if (!body.Grounded)
+                {
+                    body.InitialUnsupportedVelocity *= body.MovementDamping;
+                    body.InitialUnsupportedVelocity.y = y;
+                    velocityLinear = body.InitialUnsupportedVelocity + (body.MovementSpeed * body.MoveDirection);
+                }
+
+
+                body.InputVelocity = velocityLinear;
+                velocity.Linear = velocityLinear;
+                velocity.Angular = float3.zero;
+                // lerp smoothpos back to fixedpos slowly over time
+                //body.m_FixedPosition = translation.Value; // restore last smoothpos // backup fixedpos
+                body.m_SmoothPosition = math.lerp(body.m_SmoothPosition, translation.Value, FixedDeltaTime * 30);
+                body.m_SmoothPosition = maths.snapToZero(body.m_SmoothPosition);
+                //rotation.Value = camera.BodyRotation.Value;
+                
+            }
+
+            // movement
+            private void BodyMovement(CharacterMotor motor, Rotation rotation, ref ControllerBody body)
+            {
+                {
+                    body.IsJumping = motor.Jump && body.Grounded;
+
+                    //ufps throttle
+                    var MotorBackwardsSpeed = 0.65f;
+                    var MotorDamping = 0.17f;
+                    var MotorAcceleration = 0.85f;
+                    if (motor.Run)
+                        MotorAcceleration = 1.65f;
+
+                    if (motor.Crouch)
+                    {
+                        MotorAcceleration = 0.35f;
+                    }
+
+                    var SlopeFactor = 1.0f;
+                    var MotorAirSpeedModifier = 1.0f;
+                    var MotorExtraDamping = 0.17f;
+                    var right = math.mul(rotation.Value, Vector3.right);
+
+                    body.MotorThrottle += (motor.InputMoveVector.y > 0
+                                              ? motor.InputMoveVector.y
+                                              : motor.InputMoveVector.y * MotorBackwardsSpeed) *
+                                          ((math.forward(rotation.Value) * (MotorAcceleration * 0.1f) * MotorAirSpeedModifier) *
+                                           SlopeFactor);
+                    body.MotorThrottle += motor.InputMoveVector.x *
+                                          ((right * (MotorAcceleration * 0.1f) * MotorAirSpeedModifier) * SlopeFactor);
+
+                    //new
+                    if (motor.InputMoveVector.Equals(float2.zero) && body.Grounded)
+                    {
+                        // dampen motor force
+                        body.MotorThrottle.x /= (1.0f + (MotorExtraDamping * MotorAirSpeedModifier * TimeScale));
+                        body.MotorThrottle.z /= (1.0f + (MotorExtraDamping * MotorAirSpeedModifier * TimeScale));
+                    }
+                    else
+                    {
+                        // dampen motor force
+                        body.MotorThrottle.x /= (1.0f + (MotorDamping * MotorAirSpeedModifier * TimeScale));
+                        body.MotorThrottle.z /= (1.0f + (MotorDamping * MotorAirSpeedModifier * TimeScale));
+                    }
+
+                    if (!motor.Jump)
+                        body.MotorThrottle.y = 0;
+
+                    body.MotorThrottle = maths.snapToZero(body.MotorThrottle);
+                    body.FallSpeed = 0.01f;
+                    body.MoveDirection = float3.zero;
+                    body.MoveDirection += body.MotorThrottle;
+
+                    // --- apply anti-bump offset ---
+                    body.m_CurrentAntiBumpOffset = 0.025f;
+                    body.MoveDirection += body.m_CurrentAntiBumpOffset * maths.down * 1;
+                }
+            }
+
+            private void CheckGrounded(ref ControllerBody body, Translation translation, PhysicsCollider collider, ref PhysicsVelocity velocity)
+            {
+                var rayInput = new RaycastInput();
+                rayInput.Start = translation.Value;
+                rayInput.End = translation.Value + 1.1f * maths.down;
+                rayInput.Filter = collider.Value.Value.Filter;
+                
+                bool hit = CollisionWorld.CastRay(rayInput);
+                
+                body.Grounded = hit;
+                
+            }
+            
+            private void SetYaw(ref RotationEulerXYZ c1, CharacterMotor motor)
+            {
+                
+                quaternion xAxis = quaternion.AxisAngle(maths.up,   math.radians(motor.Yaw)); 
+                quaternion yAxis = quaternion.AxisAngle(maths.left, math.radians(0)); 
+
+                c1.Value.x = 0;
+                c1.Value.y = math.radians(motor.Yaw);
+                c1.Value.z = 0;
+            }
+        }
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var combinedHandle = JobHandle.CombineDependencies(inputDeps, m_BuildPhysicsWorld.FinalJobHandle);
+            var entityType = GetArchetypeChunkEntityType();
+            var characterMotorType = GetArchetypeChunkComponentType<CharacterMotor>();
+            var controllerBodyType = GetArchetypeChunkComponentType<ControllerBody>();
+            var physicsMassType = GetArchetypeChunkComponentType<PhysicsMass>();
+            var physicsVelocityType = GetArchetypeChunkComponentType<PhysicsVelocity>();
+            var physicsColliderType = GetArchetypeChunkComponentType<PhysicsCollider>();
+            var localToWorldType = GetArchetypeChunkComponentType<LocalToWorld>();
+            var translationType = GetArchetypeChunkComponentType<Translation>();
+            var rotationType = GetArchetypeChunkComponentType<Rotation>();
+            var rotationEulerXyzType = GetArchetypeChunkComponentType<RotationEulerXYZ>();
+            
+            var chunkJob = new ChunkMovementJob
+            {
+                EntityType = entityType,
+                CharacterMotorType = characterMotorType,
+                ControllerBodyType = controllerBodyType,
+                PhysicsMassType = physicsMassType,
+                PhysicsVelocityType = physicsVelocityType,
+                PhysicsColliderType = physicsColliderType,
+                LocalToWorldType = localToWorldType,
+                TranslationType = translationType,
+                RotationType = rotationType,
+                RotationEulerXYZType = rotationEulerXyzType,
+                CollisionWorld = m_BuildPhysicsWorld.PhysicsWorld.CollisionWorld,
+                NumDynamicBodies = m_BuildPhysicsWorld.PhysicsWorld.NumDynamicBodies,
+                FixedDeltaTime = Time.fixedDeltaTime,
+                TimeScale = Time.timeScale
+            };
+            
+            
+            //var chunkHandle = chunkJob.Schedule(m_CharacterControllers, combinedHandle);
+            var chunkHandle = JobChunkExtensions.Schedule(chunkJob, m_CharacterControllers, combinedHandle);
+            
+            return chunkHandle;
+        }
+    }
+}

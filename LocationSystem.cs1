@@ -1,0 +1,24 @@
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Rendering;
+using Unity.Transforms;
+
+namespace Game.Modules.Monsters
+{
+    public class MonsterLocationSystem : JobComponentSystem
+    {
+        EntityQuery m_MoveGoalEntities;
+
+        protected override void OnCreate()
+        {
+            m_MoveGoalEntities = GetEntityQuery(
+                ComponentType.ReadOnly<LocalToWorld>(),
+                ComponentType.ReadWrite<Location>());
+        }
+        
+        protected override JobHandle OnUpdate(JobHandle d)
+        {
+            
+        }
+    }
+}

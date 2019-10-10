@@ -1,0 +1,29 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+
+namespace Game.Systems.Characters
+{
+    public class KillCharacterSystem : ComponentSystem
+    {
+
+        private ComponentGroup Group;
+        
+        protected override void OnCreateManager()
+        {
+            Group = GetEntityQuery(ComponentType.Create<Dying>(), typeof(Character));
+        }
+
+        protected override void OnUpdate()
+        {
+            // Kill off characters that have need to die;
+            ForEach((Entity entity, Character character) =>
+            {
+                character.DestroyComponents();
+                PostUpdateCommands.RemoveComponent<Dying>(entity);
+                
+            } , Group );
+            
+        }
+    }
+}

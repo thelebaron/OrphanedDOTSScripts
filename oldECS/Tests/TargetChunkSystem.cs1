@@ -1,0 +1,270 @@
+using System;
+using System.Collections.Generic;
+using Game.Components;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using Random = System.Random;
+
+namespace Game.Systems.Tests
+{
+    public struct Trace
+    {
+        public Entity RaycastingEntity;
+        public Entity TargetEntity;
+        public float3 Position;
+        public float Distance;
+        public RaycastCommand RaycastCommand;
+    }
+
+    public class TargetChunkSystem : JobComponentSystem
+    {
+        private ComponentGroup m_seekGroup;
+        private ComponentGroup m_targetableGroup;
+        private ComponentGroup m_deadGroup;
+        private RayQuerySystem m_rayQuerySystem;
+
+        //[BurstCompile]
+        struct InitializeJob : IJobChunk
+        {
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Entity> TEntity;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<LocalToWorld> TLocal;
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Faction> TFaction;
+            [ReadOnly] public ArchetypeChunkEntityType EntityType;
+            [ReadOnly] public ArchetypeChunkComponentType<LocalToWorld> LocalType;
+            [ReadOnly] public ArchetypeChunkComponentType<Faction> FactionType;
+            public ArchetypeChunkComponentType<WorldState> TargetStateType;
+            [ReadOnly] public ArchetypeChunkBufferType<RaycastBuffer> RaycastBufferType;
+
+            [NativeDisableParallelForRestriction] public NativeArray<Trace> Traces;
+            [NativeDisableParallelForRestriction] public NativeArray<RaycastCommand> Raycasts;
+
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                var up            = new float3(0, 1, 0);
+                var entity        = chunk.GetNativeArray(EntityType);
+                var local         = chunk.GetNativeArray(LocalType);
+                var faction       = chunk.GetNativeArray(FactionType);
+                var targetState   = chunk.GetNativeArray(TargetStateType);
+                var raycastBuffer = chunk.GetBufferAccessor(RaycastBufferType);
+
+                //go through all the arrays
+                for (int index = 0; index < chunk.Count; index++)
+                {
+                    var max = (chunkIndex) * TEntity.Length;
+                    var min = max - TEntity.Length;
+                    if (min < 0)
+                        min = 0;
+                    
+                    raycastBuffer[index].Clear();
+                    for (int o = 0, z = min; o < TEntity.Length; o++,z++)
+                    {
+                        //ignore same faction
+                        if (faction[index].IsFriendly(TFaction[o].Value))
+                            continue;
+
+                        //if we need a target(and the index is not us)
+                        if (!targetState[index].HasTarget() && !entity[index].Equals(TEntity[o]))
+                        {
+                            //create appropriate data for a raycast
+                            var from      = local[index].Position        + up;
+                            var to        = TLocal[o].Position           + up;
+                            var direction = (Vector3) TLocal[o].Position - (Vector3) local[index].Position;
+                            var dot       = math.dot(local[index].Forward, direction.normalized);
+                            if (dot < 0.3f) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                                continue;
+                            var dist = math.distance(from, to);
+                            if (dist > 60.0f)
+                                continue;
+
+                            targetState[index] = new WorldState
+                            {
+                                Target    = TEntity[o],
+                                Position = TLocal[o].Position
+                            };
+
+                            var trace = new Trace
+                            {
+                                RaycastingEntity = entity[index],
+                                TargetEntity     = TEntity[o],
+                                Position         = TLocal[o].Position,
+                                Distance         = dist,
+                                RaycastCommand   = new RaycastCommand(from, direction, 100, GameLayers.MASK_GROUND)
+                            };
+                            Traces[z] = trace;
+                            Raycasts[z] = new RaycastCommand(from, direction, 100, GameLayers.MASK_GROUND);
+                            var buffer = new RaycastBuffer {Raycast = new RaycastCommand()};
+                            raycastBuffer[index].Add(buffer);
+                        }
+
+                        //if we have a target and it matches whats in the component
+                        if (targetState[index].HasTarget() && targetState[index].Target.Equals(TEntity[o]))
+                        {
+                            //Pump data into raycast array
+                            var from = local[index].Position + up;
+                            var to   = TLocal[o].Position    + up;
+
+                            var direction = (Vector3) TLocal[o].Position - (Vector3) local[index].Position;
+                            var dot       = math.dot(local[index].Forward, direction.normalized);
+                            if (dot < 0.3) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                                continue;
+
+                            var dist = math.distance(from, to);
+
+                            targetState[index] = new WorldState
+                            {
+                                Target    = TEntity[o],
+                                Position = TLocal[o].Position
+                            };
+
+                            var trace = new Trace
+                            {
+                                RaycastingEntity = entity[index],
+                                TargetEntity     = targetState[index].Target,
+                                Position         = TLocal[o].Position,
+                                Distance         = dist,
+                                RaycastCommand   = new RaycastCommand(from, direction, 100, GameLayers.MASK_GROUND)
+                            };
+                            Traces[z] = trace;
+                            Raycasts[z] = new RaycastCommand(from, direction, 100, GameLayers.MASK_GROUND);
+                            var buffer = new RaycastBuffer {Raycast = new RaycastCommand()};
+                            raycastBuffer[index].Add(buffer);
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+        protected override JobHandle OnUpdate(JobHandle deps)
+        {
+            var count             = m_seekGroup.CalculateLength() * m_targetableGroup.CalculateLength();
+            var m_raycastCommands = new NativeArray<RaycastCommand>(count, Allocator.TempJob);
+            var m_raycastHits     = new NativeArray<RaycastHit>(count, Allocator.TempJob);
+            var m_traces          = new NativeArray<Trace>(count, Allocator.TempJob); //
+            var initializeJob = new InitializeJob
+            {
+                TEntity         = m_targetableGroup.ToEntityArray(Allocator.TempJob),
+                TLocal          = m_targetableGroup.ToComponentDataArray<LocalToWorld>(Allocator.TempJob),
+                TFaction        = m_targetableGroup.ToComponentDataArray<Faction>(Allocator.TempJob),
+                EntityType      = GetArchetypeChunkEntityType(),
+                LocalType       = GetArchetypeChunkComponentType<LocalToWorld>(),
+                FactionType     = GetArchetypeChunkComponentType<Faction>(),
+                TargetStateType = GetArchetypeChunkComponentType<WorldState>(),
+                //TargetableType    = GetArchetypeChunkComponentType<Targetable>(),
+                RaycastBufferType = GetArchetypeChunkBufferType<RaycastBuffer>(),
+                Traces            = m_traces,
+                Raycasts          = m_raycastCommands
+            };
+            var initializeHandle = initializeJob.Schedule(m_seekGroup, deps);
+            initializeHandle.Complete();
+            m_raycastHits.Dispose();
+            m_raycastCommands.Dispose();
+            m_traces.Dispose();
+
+
+/*
+            var raycastHandle = RaycastCommand.ScheduleBatch(m_raycastCommands, m_raycastHits, 32, initializeHandle);
+
+            var resultsJob = new ResultsJob
+            {
+                Raycasts   = m_raycastCommands,
+                Hits       = m_raycastHits,
+                TraceData  = m_traces,
+                EntityType = GetArchetypeChunkEntityType(),
+                TargetType = GetArchetypeChunkComponentType<TargetState>(),
+                TargetableType = GetArchetypeChunkComponentType<Targetable>(),
+            };
+
+            var resultsHandle = resultsJob.Schedule(m_seekGroup, raycastHandle);
+*/
+            var clearDeadJob = new ClearDeadJob
+            {
+                TargetableEntity = m_deadGroup.ToEntityArray(Allocator.TempJob),
+                TargetType       = GetArchetypeChunkComponentType<WorldState>(),
+                TargetableType   = GetArchetypeChunkComponentType<Targetable>(),
+            };
+            var clearDeadHandle = clearDeadJob.Schedule(m_seekGroup, initializeHandle);
+
+            return clearDeadHandle;
+        }
+
+
+        protected override void OnCreateManager()
+        {
+            // query
+            m_seekGroup = GetEntityQuery(
+                ComponentType.ReadWrite<WorldState>(),
+                ComponentType.ReadOnly<Faction>(),
+                ComponentType.ReadOnly<LocalToWorld>(),
+                ComponentType.ReadOnly<Rotation>(),
+                ComponentType.ReadOnly<Health>(),
+                ComponentType.ReadWrite<Targetable>(),
+                ComponentType.ReadWrite<RaycastBuffer>(),
+                ComponentType.Exclude<Dead>(),
+                
+                
+                ComponentType.ReadOnly<Static>()
+                
+                
+            );
+
+            m_targetableGroup = GetEntityQuery(
+                ComponentType.Exclude<Dead>(),
+                ComponentType.ReadWrite<Targetable>(),
+                ComponentType.ReadOnly<LocalToWorld>(),
+                ComponentType.ReadOnly<Faction>(),
+                ComponentType.ReadOnly<Health>(),
+                
+                
+                ComponentType.ReadOnly<Static>()
+                
+                
+            );
+
+            m_deadGroup = GetEntityQuery(
+                ComponentType.ReadWrite<Targetable>(),
+                ComponentType.ReadOnly<Dead>(),
+                ComponentType.ReadOnly<Health>(),
+                
+                
+                ComponentType.ReadOnly<Static>()
+                
+                
+            );
+
+            m_rayQuerySystem = World.Active.GetOrCreateManager<RayQuerySystem>();
+        }
+
+        [BurstCompile]
+        private struct ClearDeadJob : IJobChunk
+        {
+            [DeallocateOnJobCompletion] [ReadOnly] public NativeArray<Entity> TargetableEntity;
+            public ArchetypeChunkComponentType<WorldState> TargetType;
+            public ArchetypeChunkComponentType<Targetable> TargetableType;
+
+            public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+            {
+                var target     = chunk.GetNativeArray(TargetType);
+                var targetable = chunk.GetNativeArray(TargetableType);
+
+                for (int index = 0; index < chunk.Count; index++)
+                {
+                    for (int i = 0; i < TargetableEntity.Length; i++)
+                    {
+                        if (target[index].Target.Equals(TargetableEntity[i]))
+                        {
+                            target[index]     = new WorldState();
+                            targetable[index] = new Targetable();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

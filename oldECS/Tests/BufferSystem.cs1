@@ -1,0 +1,57 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Transforms;
+
+namespace Game.Systems.Tests
+{
+    public class BufferSystem : JobComponentSystem
+    {
+        //private MyBarrier myBarrier;
+     
+        [RequireComponentTag(typeof(RaycastBuffer))]
+        private struct Job : IJobForEachWithEntity<Translation>
+        {
+            //public EntityCommandBuffer.Concurrent entityCommandBuffer;
+     
+            [NativeDisableParallelForRestriction]
+            public BufferFromEntity<RaycastBuffer> bufferFromEntity;
+     
+            public void Execute(Entity entity, int index, [ReadOnly] ref Translation c0)
+            {
+                DynamicBuffer<RaycastBuffer> buffer = bufferFromEntity[entity];
+     
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    RaycastBuffer myBufferElementData = buffer[i];
+     
+                    // logic goes here
+     
+                    buffer[i] = myBufferElementData;
+                }
+            }
+        }
+     
+        protected override void OnCreate()
+        {
+            //myBarrier = World.Active.GetExistingManager<MyBarrier>();
+        }
+     
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            Job job = new Job()
+            {
+                //entityCommandBuffer = myBarrier.CreateCommandBuffer().ToConcurrent(),
+                bufferFromEntity = GetBufferFromEntity<RaycastBuffer>()
+            };
+     
+            JobHandle jobHandle = job.Schedule(this, inputDeps);
+     
+            //myBarrier.AddJobHandleForProducer(jobHandle);
+     
+            return jobHandle;
+        }
+    }
+
+}

@@ -1,0 +1,79 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Transforms;
+
+namespace Game.Modules.Utility
+{
+    
+    [UpdateInGroup(typeof(UtilityUpdateGroup))]
+    public class CopyPositionSystem : JobComponentSystem
+        {
+            
+            private EntityQuery m_copyGroup;
+            private EntityQuery m_parentGroup;
+            private ArchetypeChunkComponentType<CopyPosition> copyPositionType;
+            private ArchetypeChunkComponentType<Translation> positionType;
+            private ArchetypeChunkComponentType<FaceCamera> faceCameraType;
+
+            protected override void OnCreate() 
+            {
+                // Prepare group
+                m_copyGroup = GetEntityQuery(typeof(Translation), typeof(CopyPosition));
+                m_parentGroup = GetEntityQuery(typeof(Translation), typeof(Health));
+            }
+
+            protected override JobHandle OnUpdate(JobHandle dependency)
+            {
+                var job = new CopyJob
+                {
+                    ParentEntity     = m_parentGroup.ToEntityArray(Allocator.TempJob),
+                    ParentPosition   = m_parentGroup.ToComponentDataArray<Translation>(Allocator.TempJob),
+                    PositionType     = GetArchetypeChunkComponentType<Translation>(),
+                    CopyPositionType = GetArchetypeChunkComponentType<CopyPosition>()
+                };
+
+                //var handle = job.Schedule(m_copyGroup, dependency);
+                var handle = JobChunkExtensions.Schedule(job, m_copyGroup, dependency);
+                
+                
+                //handle.Complete();
+                
+                
+                return handle;
+            }
+            
+            struct CopyJob : IJobChunk
+            {
+                [DeallocateOnJobCompletion][ReadOnly] public NativeArray<Entity> ParentEntity;
+                [DeallocateOnJobCompletion][ReadOnly] public NativeArray<Translation> ParentPosition;
+                
+                public ArchetypeChunkComponentType<Translation> PositionType;
+                public ArchetypeChunkComponentType<CopyPosition> CopyPositionType;
+                
+                public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+                {
+                    var copyposition = chunk.GetNativeArray(CopyPositionType);
+                    var position = chunk.GetNativeArray(PositionType);
+
+                    for (int i = 0; i < chunk.Count; i++)
+                    {
+                        var parent = copyposition[i].Parent;
+                        
+                        for (int j = 0; j < ParentPosition.Length; j++)
+                        {
+                            if (parent.Equals(ParentEntity[j]))
+                            {
+                                position[i] = new Translation{ Value = ParentPosition[j].Value + copyposition[i].OffsetValue } ;
+                            }
+                        }
+                    }
+                }
+            }
+            
+         
+
+
+        }
+}

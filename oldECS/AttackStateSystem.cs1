@@ -1,0 +1,136 @@
+using Animancer;
+using Game.Components;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using UnityEngine.AI;
+using Zeal;
+using Behaviour = Game.Components.Behaviour;
+using Random = UnityEngine.Random;
+
+namespace Game.Systems.Ai
+{
+
+    public class AttackStateSystem : ComponentSystem
+    {
+        private ComponentGroup attackGroup;
+        
+        protected override void OnCreateManager()
+        {
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Behaviour), typeof(Target), typeof(Character)},
+                None = new ComponentType[]{ typeof(Dead),typeof(Pain)}
+            };
+            
+            attackGroup = GetEntityQuery(query);
+            
+        }
+
+        protected override void OnUpdate()
+        {
+            ForEach((Entity entity, Character character, ref Behaviour think, ref Target target) =>
+            {
+                //DoTargeting(character, target);
+                character.target = target;
+                var random = Utilities.randomFloat();
+                
+                character.ResetPath();
+                character.blockMovement = 4;
+                character.isStopped = true;
+                character.RotateTowardsTarget(target.Position);
+
+                if(FacingIdeal(character.transform.rotation, character.transform.position, target.Position))
+                    character.animancer.CrossFade(character.shootState, 0.2f);
+
+                if (think.Value > think.NextThink)
+                {
+                    //next decision at this time
+                    think.NextThink = think.Value + 4 + random;
+                    
+                    if (random >= 0.0f && random < 0.5f)
+                    {
+                        think.NextThink = 0;
+                        return;
+                    }
+                    
+                    if (random >= 0.5f && random < 0.6f)
+                    {
+                        var randomAngle = Random.Range(0, 6);
+                        var radius = 2f * Random.Range(1.25f, 3f);
+                        var pos = target.Position;
+                        var dir = Quaternion.identity;
+                        var angle = 45;
+		
+                        angle *= randomAngle;
+                        dir = quaternion.AxisAngle(Vector3.up, angle);
+                        var fwd = math.forward(dir);
+                        fwd = math.normalize(fwd);
+
+                        character.SetDestination(pos + fwd * radius);
+                        
+                        //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                        return;
+                    }
+                    
+                    if (random >= 0.6f && random < 0.8f)
+                    {
+                        var randomNegative = Random.Range(-1, 1);
+                        var radius = 2f * Random.Range(1.25f, 3f);
+                        var pos = character.transform.position;
+                        var dir = Quaternion.identity;
+                        var angle = 90 * randomNegative;
+                        dir = quaternion.AxisAngle(Vector3.up, angle);
+                        var fwd = math.forward(dir);
+                        fwd = math.normalize(fwd);
+
+                        character.SetDestination(pos + (Vector3)fwd * radius);
+                        
+                        //_behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                        //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                        return;
+                    }
+                    
+                    
+                    //short side strafe, for now this turns and faces the direction but todo replace with strafe anim and aim weapon
+                    if (random >= 0.8f)
+                    {
+                        var dir = character.transform.right;
+                        if (!Utilities.rbool())
+                            dir = -dir;
+
+                        var dest = character.transform.position + dir.normalized * 1.5f;
+                        character.SetDestination(dest);
+                        
+                        //_behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                        //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                    }
+                    
+                    
+                }
+                
+
+            }, attackGroup);
+        }
+
+   
+
+        public bool FacingIdeal(quaternion rot, Vector3 pos, Vector3 targetPos)
+        {
+            var fwd = math.forward(rot);
+            Vector3 dir = (Vector3)targetPos - pos;
+            var dot = Vector3.Dot(fwd, dir.normalized);
+
+            if (dot > -0.1)
+                return true;
+            
+            return false;
+        }
+        
+    }
+    
+    
+
+    
+}

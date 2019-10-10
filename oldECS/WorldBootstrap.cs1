@@ -1,0 +1,134 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Game.Components;
+using Game.Modules.Damage;
+using Game.Systems;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+namespace Game.ECS
+{
+    public class WorldBootstrap: MonoBehaviour
+    {
+        public static EntityArchetype CharacterArchetype;
+        public static EntityManager EntityManager;
+
+        public bool create;
+
+        void CreateWorld()
+        {
+            if (!create)
+                return;
+            RegisterHybridHooks();
+            
+            var world = new World("My New World");
+            World.Active = world;
+
+            
+            EntityManager = world.EntityManager;
+            ScriptBehaviourUpdateOrder.UpdatePlayerLoop(world);
+            Debug.Log("success");
+
+            create = false;
+            
+        }
+        /*
+        public static void Initialize(string worldName, bool editorWorld)
+        {
+            var world = new World(worldName);
+            World.Active = world;
+
+            // Register hybrid injection hooks
+            InjectionHookSupport.RegisterHook(new GameObjectArrayInjectionHook());
+            InjectionHookSupport.RegisterHook(new TransformAccessArrayInjectionHook());
+            InjectionHookSupport.RegisterHook(new ComponentArrayInjectionHook());
+
+            PlayerLoopManager.RegisterDomainUnload(DomainUnloadShutdown, 10000);
+
+            IEnumerable<Type> allTypes;
+
+            foreach (var ass in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    allTypes = ass.GetTypes();
+
+                }
+                catch (ReflectionTypeLoadException e)
+                {
+                    allTypes = e.Types.Where(t => t != null);
+                    Debug.LogWarning("DefaultWorldInitialization failed loading assembly: " + ass.Location);
+                }
+
+                // Create all ComponentSystem
+                CreateBehaviourManagersForMatchingTypes(editorWorld, allTypes, world);
+            }
+            
+            ScriptBehaviourUpdateOrder.UpdatePlayerLoop(world);
+        }
+        
+        
+        */
+        
+        public static void RegisterHybridHooks()
+        {
+            var typeInTheCorrectAssembly = typeof(GameObjectArray);
+            var hybridHooks = new System.Type[]{
+                typeInTheCorrectAssembly.Assembly.GetType("Unity.Entities.GameObjectArrayInjectionHook"),
+                typeInTheCorrectAssembly.Assembly.GetType("Unity.Entities.TransformAccessArrayInjectionHook"),
+                typeInTheCorrectAssembly.Assembly.GetType("Unity.Entities.ComponentArrayInjectionHook"),
+            };
+            foreach (var hook in hybridHooks)
+            {
+                InjectionHookSupport.RegisterHook(System.Activator.CreateInstance(hook) as InjectionHook);
+            }
+ 
+            PlayerLoopManager.RegisterDomainUnload(DomainUnloadShutdown, 10000);
+        }
+ 
+        static void DomainUnloadShutdown()
+        {
+            World.DisposeAllWorlds();
+            ScriptBehaviourUpdateOrder.UpdatePlayerLoop();
+        }
+
+        
+        void OnEnable()
+        {
+            //Debug.Log("Hello ECS World!");
+            if (World.Active == null)
+            {
+                var world = new World("My New World");
+                World.Active = world;
+
+                EntityManager = world.EntityManager;
+                ScriptBehaviourUpdateOrder.UpdatePlayerLoop(world);
+            }
+            EntityManager = World.Active.EntityManager;
+            CharacterArchetype = EntityManager.CreateArchetype( typeof(Character), typeof(Health), typeof(Faction), typeof(Detector));
+
+        }
+
+        private void Update()
+        {
+            CreateWorld();
+        }
+
+        private static void OnSceneLoaded(Scene arg0, LoadSceneMode arg1)
+        {
+            InitializeWithScene();
+            
+        }
+
+        public static void InitializeWithScene()
+        {
+            
+        }
+    }
+    
+
+}

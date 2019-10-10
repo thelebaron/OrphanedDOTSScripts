@@ -1,0 +1,511 @@
+using Game.Components;
+using Game.Modules.Projectile;
+using Game.Old;
+using Game.Utils;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using Random = UnityEngine.Random;
+
+namespace Game.Modules.Characters
+{
+    [UpdateInGroup(typeof(AiGroup))]
+    public class CharacterSystem : BaseCharacterSystem
+    {
+        protected override void TryMovement(Character character, ref Translation translation, ref TargetData targetData)
+        {
+            translation.Value = character.transform.position;
+            if (!character.enabled || character.agent == null)
+                return;
+            
+            //Debug.Log("trymovement");
+            if (character.blockMovement >= 1)
+            {
+                character.blockMovement--;
+                return;
+            }
+
+            var move = Vector3.zero;
+
+            var multiplier = 1;
+            character.agent.speed = character.Speed;
+            if (targetData.HasTarget())
+            {
+                multiplier = 2;
+                character.agent.speed = character.Speed * character.CombatSpeedMultiplier;
+            }
+            
+            //Debug.Log(character.agent.desiredVelocity);
+            if (character.agent.remainingDistance > character.agent.stoppingDistance)
+            {
+                // stop the shoot anim if its playing
+                if (character.shootState.IsPlaying)
+                    character.shootState.Stop();
+                // crossfade anim if not already playing
+                if (!character.groundedMixer.IsPlaying && !character.Pain()) //painState.IsPlaying)
+                    character.animancer.CrossFade(character.groundedMixer, 0);
+                
+                character.groundedMixer.Parameter = character.forwardamount * multiplier;
+
+                Debug.DrawRay(character.transform.position, character.transform.forward, Color.blue);
+                move = character.agent.desiredVelocity;
+
+                if (move.magnitude > 1f) move.Normalize();
+                move = character.transform.InverseTransformDirection(move);
+                move = Vector3.ProjectOnPlane(move, /*ground[i].normal*/Vector3.up);
+                var turnAmount = Mathf.Atan2(move.x, move.z);
+                character.forwardamount = move.z;
+
+                // help the character turn faster (this is in addition to root rotation in the animation)
+                float turnSpeed = Mathf.Lerp(character.stationaryTurnSpeed, character.movingTurnSpeed,character.forwardamount);
+                character.transform.Rotate(0, turnAmount * turnSpeed * UnityEngine.Time.fixedDeltaTime, 0);
+                translation.Value = character.transform.position;
+                //this is the above ApplyExtraTurnRotation(character, turnAmount);
+            }
+            else if (!character.isHostile) //only do if not hostile
+            {
+                // stop the shoot anim if its playing
+                if (character.shootState.IsPlaying)
+                    character.shootState.Stop();
+                // crossfade anim if not already playing
+                if (!character.groundedMixer.IsPlaying && !character.Pain()) //painState.IsPlaying)
+                    character.animancer.CrossFade(character.groundedMixer, 0);
+
+                Debug.DrawRay(character.transform.position, character.transform.forward, Color.red);
+                move = character.agent.desiredVelocity;
+
+                if (move.magnitude > 1f) move.Normalize();
+
+                move = character.transform.InverseTransformDirection(Vector3.zero); //was move
+                move = Vector3.ProjectOnPlane(move, /*ground[i].normal*/Vector3.up);
+                var turnAmount = Mathf.Atan2(move.x, move.z);
+                character.forwardamount = move.z;
+
+                // help the character turn faster (this is in addition to root rotation in the animation)
+                float turnSpeed = Mathf.Lerp(character.stationaryTurnSpeed, character.movingTurnSpeed,
+                    character.forwardamount);
+                character.transform.Rotate(0, turnAmount * turnSpeed * UnityEngine.Time.fixedDeltaTime, 0);
+                translation.Value = character.transform.position;
+            }
+        }
+
+        protected override void TryIdle(Entity entity, Character character, ref EntTick think, ref TargetData targetData)
+        {
+            if (targetData.HasTarget())
+                return;
+            
+            //TODO move to ResetToIdle method
+            // stop the shoot anim if its playing
+            if(character.shootState.IsPlaying)
+                character.shootState.Stop();
+            // crossfade anim if not already playing
+            if(!character.groundedMixer.IsPlaying && !character.Pain()) //painState.IsPlaying)
+                character.animancer.CrossFade(character.groundedMixer, 0);
+            
+            character.isIdle = true;
+            //set animation param to actual speed for blendtree
+            character.groundedMixer.Parameter = character.forwardamount * 1;
+            character.isStopped               = false;
+
+            
+
+            
+            
+            if (character.Pain()) //painState.IsPlaying)
+            {
+                ResetPath(character);
+                character.blockMovement = 4;
+                character.isStopped     = true;
+                SetAngry(entity, character);
+                return;
+            }
+
+            /*
+
+            */
+            //block input until we reach the elapsed time
+            if (think.Value < think.NextThink && think.Locked <= 0)
+            {
+                //if reached destination, override the timer
+                if (ReachedDestination(character)) // && idleState.Think < idleState.NextThink )
+                {
+                    var overrideTime = Random.Range(0, 2);
+                    think.Locked    = overrideTime;
+                    think.NextThink = think.Value + overrideTime;
+                }
+            }
+
+
+            if (think.Value > think.NextThink && think.Locked <= 0)
+            {
+                //next decision at this time; assuming the timer isn't overriden
+                think.NextThink = think.Value + 10;
+
+                //gets a random position
+                var randomPos = character.transform.position;
+                randomPos += Random.insideUnitSphere * Random.Range(7, 15);
+
+                //go wander
+                if (character.canWander)
+                {
+                    //Debug.Log("TryIdle");
+                    SetDestination(character, randomPos);
+                }
+            }
+        }
+
+        protected override void TryAttack(Entity entity, Character character, ref EntTick think, ref TargetData targetData)
+        {
+            //Debug.Log("tryattack");
+            if (!targetData.HasTarget() || character.agent.remainingDistance > character.agent.stoppingDistance)
+            {
+                character.isHostile = false;
+                character.remainingDistance = character.agent.remainingDistance;
+                return;
+            }
+            //Debug.Log("tryattack");
+            //Debug.Log("Attack!");
+            //if was idle before, clear the destination
+            if (character.isIdle)
+            {
+                character.agent.ResetPath();
+                character.isIdle = false;
+            }
+
+            character.isHostile  = true;
+            character.targetData = targetData;
+
+            float r = Util.random();
+
+            if (character.attack_finished > Time.time)
+            {
+                if (character.Pain())
+                    return;
+
+                if (character.damagedFlagInstances > Util.r(1, 6))
+                {
+                    character.agent.SetDestination(Heading(character.transform.position, 1));
+                    character.damagedFlagInstances = 0;
+                }
+
+                //character.blockMovement = 4;
+                character.agent.ResetPath();
+                character.isStopped = true;
+
+                RotateTowardsTarget(targetData, character);
+
+                if (FacingIdeal(character.transform.rotation, character.transform.position, targetData.Position))
+                {
+                    if (!character.shootState.IsPlaying)
+                        character.animancer.CrossFade(character.shootState, 0.2f);
+                }
+
+                TryAttack(entity, character, targetData);
+
+                return;
+            }
+
+            
+
+            //Debug.Log(r);
+            if (r > 0.1f)
+            {
+                character.attack_finished = Time.time + 2;
+                //return;
+            }
+
+            if (r > 0.5f)
+            {
+                character.attack_finished = Time.time + 1;
+                //return;
+            }
+
+            if (r > 0.93f)
+            {
+                //Debug.Log("move");
+                var randomNegative = Random.Range(-1, 1);
+                var radius         = 2f * Random.Range(1.25f, 3f);
+                var pos            = character.transform.position;
+                var dir            = Quaternion.identity;
+                var angle          = 90 * randomNegative;
+                dir = quaternion.AxisAngle(Vector3.up, angle);
+                var fwd = math.forward(dir);
+                fwd = math.normalize(fwd);
+                var dest      = pos + (Vector3) fwd * radius;
+                var randomPos = Random.insideUnitSphere * Random.Range(0.85f, 1.5f);
+                dest                           = character.transform.position + randomPos;
+                character.blockMovement        = 0;
+                character.isStopped            = false;
+                character.damagedFlagInstances = 0;
+
+
+                SetDestination(character, dest);
+                character.isCombatMoving        = true;
+                character.combatMoveDestination = dest;
+                return;
+            }
+
+
+            //if(character.painState.IsPlaying && character.painState.RemainingDuration > 0.3f)
+
+
+            if (character.isCombatMoving && character.agent.remainingDistance < character.agent.stoppingDistance)
+            {
+                character.isCombatMoving = false;
+            }
+
+            if (character.isCombatMoving && character.agent.remainingDistance > character.agent.stoppingDistance)
+            {
+                character.groundedMixer.Parameter = character.forwardamount * 1;
+                character.isStopped               = false;
+                return;
+            }
+
+            //got fed up with being damaged
+            if (character.moveOnTakeDamage && character.damagedFlagInstances >= 10 && !character.isCombatMoving)
+            {
+                var randomNegative = Random.Range(-1, 1);
+                var radius         = 2f * Random.Range(1.25f, 3f);
+                var pos            = character.transform.position;
+                var dir            = Quaternion.identity;
+                var angle          = 90 * randomNegative;
+                dir = quaternion.AxisAngle(Vector3.up, angle);
+                var fwd = math.forward(dir);
+                fwd = math.normalize(fwd);
+                var dest      = pos + (Vector3) fwd * radius;
+                var randomPos = Random.insideUnitSphere * Random.Range(0.85f, 3.5f);
+                dest                           = character.transform.position + randomPos;
+                character.blockMovement        = 0;
+                character.isStopped            = false;
+                character.damagedFlagInstances = 0;
+
+                SetDestination(character, dest);
+                character.isCombatMoving        = true;
+                character.combatMoveDestination = dest;
+                return;
+            }
+
+
+            if (think.Value > think.NextThink)
+            {
+                var random = Util.random();
+                //next decision at this time
+                think.NextThink = think.Value + 4 + random;
+
+                if (random >= 0.0f && random < 0.5f)
+                {
+                    think.NextThink = 0;
+                    return;
+                }
+
+                if (random >= 0.5f && random < 0.6f)
+                {
+                    var randomAngle = Random.Range(0, 6);
+                    var radius      = 2f * Random.Range(1.25f, 3f);
+                    var pos         = targetData.Position;
+                    var dir         = Quaternion.identity;
+                    var angle       = 45;
+
+                    angle *= randomAngle;
+                    dir   =  quaternion.AxisAngle(Vector3.up, angle);
+                    var fwd = math.forward(dir);
+                    fwd = math.normalize(fwd);
+
+                    SetDestination(character, pos + fwd * radius);
+
+                    //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                    return;
+                }
+
+                if (random >= 0.6f && random < 0.8f)
+                {
+                    var randomNegative = Random.Range(-1, 1);
+                    var radius         = 2f * Random.Range(1.25f, 3f);
+                    var pos            = character.transform.position;
+                    var dir            = Quaternion.identity;
+                    var angle          = 90 * randomNegative;
+                    dir = quaternion.AxisAngle(Vector3.up, angle);
+                    var fwd = math.forward(dir);
+                    fwd = math.normalize(fwd);
+
+                    SetDestination(character, pos + (Vector3) fwd * radius);
+
+                    //_behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                    //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                    return;
+                }
+
+                //short side strafe, for now this turns and faces the direction but todo replace with strafe anim and aim weapon
+                if (random >= 0.8f)
+                {
+                    var dir = character.transform.right;
+                    if (!Util.rbool())
+                        dir = -dir;
+
+                    var dest = character.transform.position + dir.normalized * 1.5f;
+                    SetDestination(character, dest);
+
+                    //_behaviour[i] =  new Behaviour { Value = Be.Strafe, PreviousValue = Be.Reevaluate };
+                    //PostUpdateCommands.AddComponent(entity, new StrafeState()); //strafestate
+                }
+            }
+        }
+
+        private void TryAttack(Entity entity, Character character, TargetData targetData)
+        {
+            //Debug.Log("isFiring?");
+            if (!character.isFiring)
+                return;
+            //Debug.Log("isFiring!");
+            
+            var weapon = character.Weapons[0];
+            
+            InstantiateProjectile(entity, character, weapon, targetData);
+            InstantiateMuzzle(character);
+            character.shootAudio.Play(character.Weapons[0].audioSource);
+            character.isFiring = false;
+        }
+
+        private void InstantiateProjectile(Entity entity, Character character, CharacterWeapon weapon, TargetData targetData)
+        {
+            //var muzzlePos = weapon.MuzzlePoint.transform.position;
+            if (!LocalToWorldData.Exists(character.ProjectileSpawnEntity)) 
+                return;
+            if (!LocalToWorldData.Exists(targetData.TargetEntity)) 
+                return;
+            
+            
+            var pos = LocalToWorldData[character.ProjectileSpawnEntity].Position;
+
+            var targetPosition = LocalToWorldData[targetData.TargetEntity].Position;// + ActorCenterData[targetData.TargetEntity].Offset;
+
+            if (ActorCenterData.Exists(targetData.TargetEntity))
+                targetPosition = LocalToWorldData[targetData.TargetEntity].Position + ActorCenterData[targetData.TargetEntity].Offset;
+            //if (!characterTarget.TargetEntity.Equals(Player))
+                //targetPosition += maths.up;
+            var dir = math.normalize(targetPosition - pos);
+            
+            //var p = EntityManager.GetComponentData<LocalToWorld>().Position;
+            //var rot = quaternion.LookRotation(LocalToWorldData[character.WeaponEntity].Forward, maths.up);
+            if (weapon.projectileCount <= 0)
+                weapon.projectileCount = 1;
+            
+            for (int i = 0; i < weapon.projectileCount; i++)
+            {
+                dir = SpreadDirection(weapon.directionalSpread, weapon.directionalSpread, quaternion.LookRotation(dir, maths.up));
+                
+                var rot = quaternion.LookRotation(dir, maths.up);
+                var projectileEntity = PostUpdateCommands.Instantiate(character.ProjectileEntity);
+                /*
+                PostUpdateCommands.SetComponent(projectileEntity, new Projectile
+                {
+                    TimeToLive = 5,
+                    Speed = 35,
+                    DamageEvent = damageEvent,
+                    RayCollisionFilter = CollisionFilter.Default 
+                });*/
+                PostUpdateCommands.AddComponent(projectileEntity, new Instigator(entity));
+                PostUpdateCommands.SetComponent(projectileEntity, new Translation {Value = pos});
+                PostUpdateCommands.SetComponent(projectileEntity, new Rotation {Value    = rot});
+            }
+            
+        }
+
+        private float3 SpreadDirection(float3 minSpread, float3 maxSpread, quaternion rot)
+        {
+            var rotatedVector = math.mul(rot, maths.forward);
+            var dir           = rotatedVector;
+                
+            var x = Rand.NextFloat(-minSpread.x, maxSpread.x);
+            var y = Rand.NextFloat(-minSpread.y, maxSpread.y);
+            var z = Rand.NextFloat(-minSpread.z, maxSpread.z);
+            dir += new float3(x, y, z);
+            
+            return dir;
+        }
+        
+        private void InstantiateMuzzle(Character character)
+        {
+            if (!LocalToWorldData.Exists(character.ProjectileSpawnEntity)) 
+                return;
+            var pos = LocalToWorldData[character.ProjectileSpawnEntity].Position;
+            var rot = quaternion.LookRotation(LocalToWorldData[character.ProjectileSpawnEntity].Forward, maths.up);
+            
+            var muzzleEntity = PostUpdateCommands.Instantiate(character.MuzzleEntity);
+            
+            
+            //var muzzleEntity = PostUpdateCommands.Instantiate(character.MuzzleEntity);
+           // PostUpdateCommands.SetComponent(muzzleEntity, new Translation { Value = pos });
+           // PostUpdateCommands.SetComponent(muzzleEntity, new Rotation { Value = rot });
+            
+            //PostUpdateCommands.SetComponent(muzzleEntity, new Translation { Value = pos });
+            //PostUpdateCommands.SetComponent(muzzleEntity, new Rotation { Value = rot });
+            //PostUpdateCommands.AddComponent(muzzleEntity, new TimedDestroy());
+            
+            
+            PostUpdateCommands.AddComponent(muzzleEntity, new Parent
+            {
+                Value = character.ProjectileSpawnEntity
+            });
+            PostUpdateCommands.AddComponent(muzzleEntity, new LocalToParent());
+            //PostUpdateCommands.AddComponent(muzzleEntity, new TimedDestroy());
+        }
+
+        protected override void TryReactToDamage(Character character, ref Actor actor, ref TargetData targetData)
+        {
+            if (!actor.Damaged) 
+                return;
+            
+            actor.Damaged = false;
+            //targetData.TargetEntity = actor.Damager;
+            
+            float r = Util.random();
+            if (character.pain_finished > Time.time)
+                return;
+
+            if (r > 0)
+            {
+                character.Pain(true);
+                character.pain_finished = Time.time + 1;
+            }
+        }
+        
+        public Vector3 Heading(Vector3 pos, float range)
+        {
+            var dest = new float3();
+            range = Random.Range(0.55f, 1.25f);
+/*
+            var negativecoinflip = Random.Range(0, 1);
+            if (negativecoinflip % 0 == 0)
+            {
+                range = -range;
+            }
+*/
+            var randomPos = Random.insideUnitSphere * range;
+            dest = pos + randomPos;
+            
+            return dest;
+        }
+        
+        // sound stuff
+        public void OnSight(Character character)
+        {
+            if(character.sightAudio !=null)
+                character.sightAudio.Play(character.audioSource, false);
+        }
+        
+        public void PlayPain(Character character)
+        {
+            if(character.hitAudio !=null)
+                character.hitAudio.Play(character.audioSource, false);
+        }
+        
+        public void OnDead(Character character)
+        {
+            if(character.deathAudio !=null)
+                character.deathAudio.Play(character.audioSource, false);
+        }
+
+    }
+}

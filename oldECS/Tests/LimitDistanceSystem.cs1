@@ -1,0 +1,60 @@
+using Game.Components;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+
+namespace Game.Systems.Tests
+{
+    public class LimitDistanceSystem : JobComponentSystem
+    {
+        private EndSimulationEntityCommandBufferSystem endSimulationEntityCommandBufferSystem;
+        private EntityQuery ActiveGroup;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            endSimulationEntityCommandBufferSystem = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+
+            ActiveGroup = GetEntityQuery(ComponentType.ReadOnly<Translation>(), 
+                ComponentType.ReadOnly<LimitDistance>(), ComponentType.Exclude<Disabled>());
+        }
+
+        struct DistanceCheckAndDisableJob : IJobParallelFor
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> Entities;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Translation> Positions;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<LimitDistance> LimitDistances;
+            
+            public void Execute(int index)
+            {
+                var dist = math.distance(Positions[index].Value, LimitDistances[index].Value);
+                if (dist >= LimitDistances[index].MaxDistance)
+                {
+                    CommandBuffer.AddComponent(index, Entities[index], new Disabled());
+                }
+            }
+        }
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var job = new DistanceCheckAndDisableJob
+            {
+                CommandBuffer  = endSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent(),
+                Entities       = ActiveGroup.ToEntityArray(Allocator.TempJob),
+                Positions      = ActiveGroup.ToComponentDataArray<Translation>(Allocator.TempJob),
+                LimitDistances = ActiveGroup.ToComponentDataArray<LimitDistance>(Allocator.TempJob)
+            };
+            var handle = job.Schedule(ActiveGroup.CalculateLength(), 32, inputDeps);
+            endSimulationEntityCommandBufferSystem.AddJobHandleForProducer(handle);
+            
+            handle.Complete();
+            return inputDeps;
+        }
+    }
+}
+
+

@@ -1,0 +1,131 @@
+/*
+ using Game.Components;
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+using UnityEngine.AI;
+using Rigidbody = UnityEngine.Rigidbody;
+
+namespace Game.Systems 
+{
+    [UpdateAfter(typeof(GroundedSystem))]
+    public class MovementSystem : ComponentSystem 
+    {
+        private ComponentGroup group;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            
+            group = GetEntityQuery(typeof(Character), typeof(NavMeshAgent), typeof(Animator), typeof(Rigidbody), ComponentType.ReadOnly<Grounded>(), ComponentType.Subtractive<Dead>());
+        }
+
+        protected override void OnUpdate()
+        {
+            var agent = group.GetComponentArray<NavMeshAgent>();
+            var rigid = group.GetComponentArray<Rigidbody>();
+            var ground = group.GetComponentDataArray<Grounded>();
+            var movement = group.GetComponentArray<Movement>();
+            var entities = group.GetEntityArray();
+            
+            return;
+            for (int i = 0; i < entities.Length; i++)
+            {
+                
+                if(!movement[i].enabled )
+                    continue;
+                
+                if(agent[i] == null)
+                    continue;
+                
+                if(rigid[i] == null)
+                    continue;
+
+                if (movement[i].blockMovement >= 1)
+                {
+                    movement[i].blockMovement--;
+                    continue;
+                }
+                
+                if (agent[i] != null)
+                {
+                    agent[i].isStopped = movement[i].isStopped;
+                    
+                    var move = Vector3.zero;
+                    
+                    if (agent[i].remainingDistance > agent[i].stoppingDistance)
+                    {
+                        Debug.DrawRay(movement[i].transform.position,movement[i].transform.forward, Color.blue);
+                        move = agent[i].desiredVelocity;
+            
+                        if (move.magnitude > 1f) move.Normalize();
+                        move = movement[i].transform.InverseTransformDirection(move);
+                        move = Vector3.ProjectOnPlane(move, ground[i].normal);
+                        var turnAmount = Mathf.Atan2(move.x, move.z);
+                        movement[i].forwardamount = move.z;
+                        
+                        // help the character turn faster (this is in addition to root rotation in the animation)
+                        float turnSpeed = Mathf.Lerp(movement[i].stationaryTurnSpeed,movement[i].movingTurnSpeed, movement[i].forwardamount);
+                        movement[i].transform.Rotate(0, turnAmount * turnSpeed * Time.deltaTime, 0);
+
+                        //this is the above ApplyExtraTurnRotation(movement[i], turnAmount);
+                    } 
+                    else
+                    {
+                        
+                        Debug.DrawRay(movement[i].transform.position,movement[i].transform.forward, Color.red);
+                        move = movement[i].agent.desiredVelocity;
+                        
+                        if (move.magnitude > 1f) move.Normalize();
+                        
+                        move = movement[i].transform.InverseTransformDirection(Vector3.zero); //was move
+                        move = Vector3.ProjectOnPlane(move,ground[i].normal);
+                        var turnAmount = Mathf.Atan2(move.x, move.z);
+                        movement[i].forwardamount = move.z;
+                        
+                        // help the character turn faster (this is in addition to root rotation in the animation)
+                        float turnSpeed = Mathf.Lerp(movement[i].stationaryTurnSpeed, movement[i].movingTurnSpeed, movement[i].forwardamount);
+                        movement[i].transform.Rotate(0, turnAmount * turnSpeed * Time.deltaTime, 0);
+                    }
+                }
+                
+                
+                //needed for animatormove method
+            }
+        }
+        
+        void ApplyExtraTurnRotation(Movement movement, float turnAmount)
+        {
+            // help the character turn faster (this is in addition to root rotation in the animation)
+            float turnSpeed = Mathf.Lerp(movement.stationaryTurnSpeed, movement.movingTurnSpeed, movement.forwardamount);
+            movement.transform.Rotate(0, turnAmount * turnSpeed * Time.deltaTime, 0);
+        }
+        
+        public void Move(Transform tr, Vector3 move, Vector3 groundNormal, ref float fwd, float stationaryTurnSpeed, float movingTurnSpeed) {
+            
+            // convert the world relative moveInput vector into a local-relative
+            // turn amount and forward amount required to head in the desired
+            // direction.
+            if (move.magnitude > 1f) move.Normalize();
+            move = tr.InverseTransformDirection(move);
+            move = Vector3.ProjectOnPlane(move, groundNormal);
+            var turnAmount = Mathf.Atan2(move.x, move.z);
+            fwd = move.z;
+            // help the character turn faster (this is in addition to root rotation in the animation)
+            float turnSpeed = Mathf.Lerp(stationaryTurnSpeed, movingTurnSpeed, fwd);
+            tr.Rotate(0, turnAmount * turnSpeed * Time.deltaTime, 0);
+        }
+
+        
+        public void RotateTowardsTarget(Transform tr, Vector3 destination, float movingTurnSpeed) {
+            Vector3 lookPos = destination - tr.position;
+            lookPos.y = 0;
+            Quaternion rotation = Quaternion.LookRotation(lookPos);
+            
+            var turnSpeed = movingTurnSpeed * 0.01f;
+            tr.rotation = Quaternion.Slerp(tr.rotation, rotation,  turnSpeed * Time.deltaTime);  
+        }
+
+    }
+}
+*/

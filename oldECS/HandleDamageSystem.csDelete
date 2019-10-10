@@ -1,0 +1,126 @@
+using Game.Components;
+using Game.Modules.HitCollision;
+using Game.Old;
+using Unity.Entities;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Modules.Damage
+{
+    //[DisableAutoCreation]
+    public class HandleDamageRefSystem : ComponentSystem
+    {
+
+        protected override void OnUpdate()
+        {
+            return;
+            /*
+            Entities.With(ReferrerGroup).ForEach((Entity hitEnt, HitCollisionRef referrer) =>
+            {
+                //if there's a pending damage event, process it
+                if (referrer.damageEvents.Count > 0)
+                {
+                    Entities.With(HealthGroup).ForEach((Entity e0, ref Health health) =>
+                    {
+                        if (health.Value <= 0)
+                        {
+                            referrer.damageEvents.Clear();
+                            return;
+                        }
+                        
+                        if (e0 == referrer.RootEntity)
+                        {
+                            var damageEvent = new DamageEvent();
+                            
+                            for (var eventIndex = 0; eventIndex < referrer.damageEvents.Count; eventIndex++)
+                            {
+                                damageEvent = referrer.damageEvents[eventIndex];
+                                health.ApplyDamage(damageEvent);
+                            }
+
+                            var currentHealth = health.Value;
+                            
+                            Entities.With(HealthWithDamageStateGroup).ForEach((Entity e1, ref DamageHistory damageState) =>
+                            {
+                                if (e1 == referrer.RootEntity)
+                                {
+                                    damageState.TookDamage = true;
+                                    damageState.LastDamageAmount = damageEvent.damage;
+                                    damageState.LastDamager = damageEvent.instigator;
+                                    damageState.LastDamageEvent = damageEvent;
+                                    if (currentHealth <= 0)
+                                    {
+                                        //damageState.killedBy = damageEvent.instigator;
+                                    }
+                                }
+                            });
+                            
+                            referrer.damageEvents.Clear();
+                        }
+                    });
+
+                    Entities.With(npcGroup).ForEach((Entity ent, Character character, ref Health health, ref DamageHistory damageState, ref TargetState worldState) =>
+                    {
+                        if (ent == referrer.RootEntity)
+                        {
+                            if (!worldState.HasTarget())
+                            {
+                                worldState.Target = damageState.LastDamager;
+                                var threatSphere = PostUpdateCommands.CreateEntity();
+
+                                PostUpdateCommands.AddComponent(threatSphere, new Threat
+                                {
+                                    ThreatEntity = damageState.LastDamager,
+                                    Radius       = 150,
+                                    Position     = damageState.LastDamageEvent.instigatorPosition
+                                    //Position = EntityManager.HasComponent<>()
+                                });
+                                PostUpdateCommands.AddComponent(threatSphere, new Translation
+                                {
+                                    Value = character.transform.position
+                                });
+                                PostUpdateCommands.AddComponent(threatSphere, new LocalToWorld());
+                                //Debug.Log(health.LastDamageEvent.instigatorPosition);
+                                // var x = this.GetComponentDataFromEntity(typeof(Translation));
+                            }
+
+                            character.lastDamagerEntity = damageState.LastDamager;
+
+                            float r = Util.r();
+                            if (character.pain_finished > Time.time)
+                                return;
+
+                            //todo move this into character behaviour system for personalised pain behaviours
+                            if (r > 0)
+                            {
+                                character.Pain(true);
+                                character.pain_finished = Time.time + 1;
+                            }
+
+                            character.lastDamageTakenFromAttacker = damageState.LastDamageAmount;
+                            character.damagedTime                 = Time.time;
+                            character.damagedFlagInstances++;
+                        }
+                    });
+                }
+
+                referrer.damageEvents.Clear();
+            });*/
+        }
+        
+        private EntityQuery npcGroup;
+        private EntityQuery ReferrerGroup;
+        private EntityQuery HealthGroup;
+        private EntityQuery HealthWithDamageStateGroup;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            npcGroup      = GetEntityQuery(typeof(Character), typeof(Health), typeof(DamageHistory), typeof(CharacterTarget), ComponentType.Exclude<Dead>());
+            ReferrerGroup = GetEntityQuery(typeof(HitCollisionRef));
+            HealthGroup   = GetEntityQuery(typeof(Health));
+            HealthWithDamageStateGroup = GetEntityQuery(typeof(Health), typeof(DamageHistory));
+
+        }
+    }
+}

@@ -1,0 +1,257 @@
+
+using System.Collections.Generic;
+using Game.Components;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Rendering;
+using Unity.Transforms;
+using UnityEngine;
+
+/*
+namespace Game.Systems
+{
+    
+    [UpdateAfter(typeof(DetectorSystem))]
+    public class DetectorBarrier : BarrierSystem { }
+    
+    public class DetectorSystem : JobComponentSystem
+    {
+        [Inject] private DetectorBarrier Barrier;
+        
+        private ComponentGroup detectingGroup;
+        private ComponentGroup other;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            
+            detectingGroup = GetEntityQuery(
+                ComponentType.Create<Detector>(), 
+                ComponentType.Create<TargetInfo>(), 
+                ComponentType.Create<Faction>(), 
+                ComponentType.Subtractive<Dead>(), 
+                ComponentType.ReadOnly<Position>(), 
+                ComponentType.ReadOnly<Rotation>()
+                );
+            
+            other = GetEntityQuery( 
+                ComponentType.Subtractive<Dead>(), 
+                ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Faction>(), ComponentType.ReadOnly<Health>()
+            );
+
+        }
+        
+        //[BurstCompile(CompileSynchronously = true)]
+        struct SetupJob : IJobParallelFor
+        {
+            
+            
+            [ReadOnly]public EntityArray entity;
+            [ReadOnly]public ComponentDataArray<Detector> detector;
+            [ReadOnly]public ComponentDataArray<TargetInfo> target;
+            [ReadOnly]public ComponentDataArray<Position> position;
+            [ReadOnly]public ComponentDataArray<Rotation> rotation;
+            [ReadOnly]public ComponentDataArray<Faction> faction;
+            
+            [ReadOnly]public EntityArray other_entity;
+            [ReadOnly]public ComponentDataArray<Position> other_position;
+            [ReadOnly]public ComponentDataArray<Health> other_health;
+            [ReadOnly]public ComponentDataArray<Faction> other_faction;
+
+            [NativeDisableParallelForRestriction]public NativeArray<Entity> listEntitys;
+            [NativeDisableParallelForRestriction]public NativeArray<TargetInfo> detector_targets;
+            
+            [NativeDisableParallelForRestriction]public NativeArray<Entity> listOtherEntitys;
+            [NativeDisableParallelForRestriction]public NativeArray<Health> listOtherHealths;
+            [NativeDisableParallelForRestriction]public NativeArray<Position> listOtherPositions;
+            
+            [NativeDisableParallelForRestriction]public NativeArray<RaycastCommand> listRaycasts;
+            [NativeDisableParallelForRestriction]public NativeArray<float> listDistances;
+            [NativeDisableParallelForRestriction]public NativeArray<Vector3> listDirections;
+            
+            
+            public void Execute(int index)
+            {
+                //if theres already a target ignore
+                if(!target[index].Entity.Equals(Entity.Null))
+                    return;
+                
+                var max = (index + 1) * other_entity.Length;
+                var min = max - other_entity.Length;
+                if (min < 0)
+                    min = 0;
+                
+                for (int j = 0, z = min; j < other_entity.Length; j++, z++)
+                {
+                    //ignore same faction
+                    if(faction[index].Value == other_faction[j].Value)
+                        continue;
+                    
+                    //ignore self
+                    if(entity[index].Equals(other_entity[j]))
+                        continue;
+                    
+                    //Pump data into raycast array
+                    var origin = (Vector3)position[index].Value + (Vector3.up * 1.75f);
+                    var otherPos = (Vector3)other_position[j].Value + (Vector3.up * 1.75f);
+                    
+                    var dist = math.distance(origin, otherPos);
+                    if(dist > 40f)
+                        continue;
+                    
+                    var dir = (Vector3)other_position[j].Value - (Vector3)position[index].Value;
+                    
+                    var fwd = math.forward(rotation[index].Value);
+                    var dot = math.dot(fwd, dir.normalized);
+                    if (dot < 0.3) //was dot < -0.1 , a bit too extreme, q1 value is 0.3
+                        continue;
+                    
+                    //finally found a valid raycast target, fill in details
+                    listEntitys[z] = entity[index];
+                    detector_targets[z] = target[index];
+                    listOtherEntitys[z] = other_entity[j];
+                    listOtherHealths[z] = other_health[j];
+                    listOtherPositions[z] = other_position[j];
+                    listRaycasts[z] = new RaycastCommand(origin, dir, 100, GameLayers.MASK_GROUND);
+                    listDistances[z] = dist;
+                    listDirections[z] = dir;
+                }
+            }
+        }
+        
+        private JobHandle raycastHandle;
+
+        struct ResultsJob : IJob
+        {
+            [ReadOnly]public EntityCommandBuffer commandBuffer;
+
+            [ReadOnly] public NativeArray<RaycastHit> hits;
+
+            [ReadOnly]public NativeArray<Entity> listEntitys;
+            [ReadOnly] public NativeArray<TargetInfo> detector_target;
+            
+            [ReadOnly]public NativeArray<Entity> listOtherEntitys;
+            [ReadOnly]public NativeArray<Health> listOtherHealths;
+            [ReadOnly]public NativeArray<Position> listOtherPositions;
+            [ReadOnly]public NativeArray<float> listDistances;
+            
+            public void Execute() //listRaycasts
+            {
+
+                for (int index = 0; index < hits.Length; index++)
+                {
+                    
+                    if(listOtherEntitys[index].Equals(Entity.Null))
+                        continue;
+                    
+                    if(!detector_target[index].Entity.Equals(Entity.Null))
+                        continue;
+                    
+                    // diameter of the capsule, note this wont work if the system ever needs to handle non human sized capsules but
+                    // hopefully ecs will support colliders by the time we need to address this
+                    var minDist = listDistances[index] - 0.65f;
+                
+                    if(hits[index].distance < minDist && hits[index].distance > 0 )
+                        continue;
+                    
+                
+                    commandBuffer.SetComponent(listEntitys[index], new TargetInfo{ Entity = listOtherEntitys[index], Health = listOtherHealths[index].Value, Position = listOtherPositions[index].Value}); //
+                    
+                }
+                
+            }
+        }
+        
+        
+
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            //return inputDeps;
+            var entity = detectingGroup.GetEntityArray();
+            var detector = detectingGroup.GetComponentDataArray<Detector>();
+            var target = detectingGroup.GetComponentDataArray<TargetInfo>();
+            var position = detectingGroup.GetComponentDataArray<Position>();
+            var rotation = detectingGroup.GetComponentDataArray<Rotation>();
+            var faction = detectingGroup.GetComponentDataArray<Faction>();
+            var detectorNative = new NativeArray<Detector>(entity.Length, Allocator.TempJob);
+            
+            var otherEntity = other.GetEntityArray();
+            var otherFaction = other.GetComponentDataArray<Faction>();
+            var otherPosition = other.GetComponentDataArray<Position>();
+            var otherHealth = other.GetComponentDataArray<Health>();
+            
+            var max = entity.Length * otherEntity.Length;
+            
+            var listEntitys = new NativeArray<Entity>(max,Allocator.TempJob);
+            var detector_target = new NativeArray<TargetInfo>(max,Allocator.TempJob);
+            var listOtherEntitys = new NativeArray<Entity>(max,Allocator.TempJob);
+            var listOtherHealths = new NativeArray<Health>(max,Allocator.TempJob);
+            var listOtherPositions = new NativeArray<Position>(max,Allocator.TempJob);
+            var listRaycasts = new NativeArray<RaycastCommand>(max,Allocator.TempJob);
+            var listDistances = new NativeArray<float>(max,Allocator.TempJob);
+            var listDirections = new NativeArray<Vector3>(max,Allocator.TempJob);
+            var listHits = new NativeArray<RaycastHit>(max,Allocator.TempJob);
+            
+            SetupJob setup = new SetupJob
+            {
+                entity = entity, detector = detector, target = target, position = position, rotation = rotation, faction = faction,
+
+                other_entity = otherEntity, other_health = otherHealth, other_position = otherPosition,other_faction = otherFaction,
+                
+                listEntitys = listEntitys, detector_targets = detector_target, listOtherPositions = listOtherPositions, listOtherHealths = listOtherHealths,
+                
+                listOtherEntitys = listOtherEntitys,listRaycasts = listRaycasts,listDistances=listDistances,listDirections = listDirections
+            };
+
+            var input = setup.Schedule(entity.Length, 4);
+            input.Complete();
+            
+            // schedule the job
+            raycastHandle = RaycastCommand.ScheduleBatch(listRaycasts, listHits, 32, input);
+
+            ResultsJob results = new ResultsJob
+            {
+                commandBuffer = Barrier.CreateCommandBuffer(),
+                hits = listHits,
+                listEntitys = listEntitys,
+                detector_target = detector_target,
+                listOtherEntitys = listOtherEntitys,
+                listOtherPositions = listOtherPositions, 
+                listOtherHealths = listOtherHealths,
+                listDistances = listDistances
+            };
+            var resultsHandle = results.Schedule(raycastHandle);
+            resultsHandle.Complete();
+
+            
+
+            
+            
+            detectorNative.Dispose();
+
+            listEntitys.Dispose();
+            detector_target.Dispose();
+            listOtherEntitys.Dispose();
+            listOtherHealths.Dispose();
+            listOtherPositions.Dispose();
+            listRaycasts.Dispose();
+            listHits.Dispose();
+            listDistances.Dispose();
+            listDirections.Dispose();
+
+            
+            
+            
+            return (inputDeps);
+        }
+
+ 
+
+        
+    }
+}
+*/

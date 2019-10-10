@@ -1,0 +1,128 @@
+using Game.Components;
+using Game.Modules.Damage;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+namespace Game.Systems.Utility
+{
+    
+    //[UpdateAfter(typeof(ForwardCollisionSystem))]
+    //public class ForwardCollisionBarrier : EntityCommandBufferSystem {}
+    public class ForwardCollisionSystem : JobComponentSystem
+    {
+        private ComponentGroup CollisionGroup;
+        private EndSimulationEntityCommandBufferSystem CollisionBarrier;
+        
+        [BurstCompile]
+        struct PrepareRay : IJobParallelFor
+        {
+            [ReadOnly] public float dt;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> Entity;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Translation> Position;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<MoveSpeed> MoveSpeed;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Rotation> Rotation;
+
+            [WriteOnly] [NativeDisableParallelForRestriction]
+            public NativeArray<RaycastCommand> RaycastBuffer;
+
+            [WriteOnly] [NativeDisableParallelForRestriction]
+            public NativeArray<Entity> EntityBuffer;
+
+            [WriteOnly] [NativeDisableParallelForRestriction]
+            public NativeArray<Translation> PositionBuffer;
+
+            public void Execute(int i)
+            {
+                //var timeToLive = MoveSpeed[i].TimeToLive - dt;
+                var previousPos = Position[i].Value;
+                PositionBuffer[i] = new Translation
+                    {Value = Position[i].Value + (dt * MoveSpeed[i].Value * math.forward(Rotation[i].Value))};
+                float dist = math.distance(Position[i].Value, previousPos);
+                var   dir  = math.normalize(math.forward(Rotation[i].Value)) * dist;
+
+                EntityBuffer[i]  = Entity[i];
+                RaycastBuffer[i] = new RaycastCommand(previousPos, dir, dist, GameLayers.MASK_COLLISION);
+
+                //MoveSpeed[i]= new Projectile { TimeToLive = timeToLive, Speed = MoveSpeed[i].Speed, previousPosition = previousPos, damageEvent = MoveSpeed[i].damageEvent };
+            }
+        }
+        
+        struct CheckForHit : IJobParallelFor
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+            [ReadOnly][DeallocateOnJobCompletion]public NativeArray<RaycastHit> HitsBuffer;
+            [ReadOnly][DeallocateOnJobCompletion]public NativeArray<RaycastCommand> RaycastBuffer;
+            [ReadOnly][DeallocateOnJobCompletion]public NativeArray<Entity> EntityBuffer;
+            [ReadOnly][DeallocateOnJobCompletion]public NativeArray<Translation> PositionBuffer;
+
+            public void Execute(int i)
+            {
+                if (HitsBuffer[i].normal != Vector3.zero)
+                {
+                    CommandBuffer.SetComponent(i, EntityBuffer[i], new Translation {Value = HitsBuffer[i].point});
+                    CommandBuffer.SetComponent(i, EntityBuffer[i], new MoveSpeed());// zero out the speed
+                    
+                }
+                
+            }
+        }
+ 
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var collisionLength = CollisionGroup.CalculateLength();
+            var deltaTime = Time.fixedDeltaTime;
+            var raycastBuffer = new NativeArray<RaycastCommand>(collisionLength, Allocator.TempJob);
+            var hitsBuffer = new NativeArray<RaycastHit>(collisionLength, Allocator.TempJob);
+            var entityBuffer = new NativeArray<Entity>(collisionLength, Allocator.TempJob);
+            var positionBuffer     = new NativeArray<Translation>(collisionLength, Allocator.TempJob);
+            
+            var prepareRayJob = new PrepareRay
+            {
+                dt             = deltaTime,
+                Entity         = CollisionGroup.ToEntityArray(Allocator.TempJob),
+                Position       = CollisionGroup.ToComponentDataArray<Translation>(Allocator.TempJob),
+                MoveSpeed      = CollisionGroup.ToComponentDataArray<MoveSpeed>(Allocator.TempJob),
+                Rotation       = CollisionGroup.ToComponentDataArray<Rotation>(Allocator.TempJob),
+                RaycastBuffer  = raycastBuffer,
+                EntityBuffer   = entityBuffer,
+                PositionBuffer = positionBuffer
+            };
+            var prepareJobHandle = prepareRayJob.Schedule(collisionLength, 32 , inputDeps);
+            //prepareJobHandle.Complete();
+            
+            var raycastDependency  = RaycastCommand.ScheduleBatch(raycastBuffer, hitsBuffer, 32,  prepareJobHandle );
+
+            var checkForHitJob = new CheckForHit
+            {
+                CommandBuffer  = CollisionBarrier.CreateCommandBuffer().ToConcurrent(),
+                HitsBuffer     = hitsBuffer,
+                RaycastBuffer  = raycastBuffer,
+                EntityBuffer   = entityBuffer,
+                PositionBuffer = positionBuffer
+            };
+            var integrateDependency  = checkForHitJob.Schedule(collisionLength, 32, raycastDependency );
+
+            integrateDependency.Complete();
+            
+
+            return inputDeps;
+        }
+        
+        protected override void OnStartRunning()
+        {
+            CollisionGroup = GetEntityQuery(typeof(Translation), typeof(Rotation), typeof(MoveForward), typeof(MoveSpeed),
+                typeof(ForwardCollision));
+            CollisionBarrier = World.Active.GetOrCreateManager<EndSimulationEntityCommandBufferSystem>();
+
+        }
+
+
+
+    }
+
+}

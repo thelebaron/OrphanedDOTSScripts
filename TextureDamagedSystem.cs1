@@ -1,0 +1,39 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Transforms;
+using UnityEditor;
+using UnityEngine;
+
+namespace Game.Systems
+{
+    public class TextureDamagedSystem : ComponentSystem
+    {
+        
+        EntityQuery switchSkinGroup;
+        //EntityQuery switchSkinGroup2;
+        private static readonly int DamageAmount = Shader.PropertyToID("_DamageAmount");
+
+        protected override void OnCreateManager()
+        {
+            switchSkinGroup = GetEntityQuery(typeof(Health), typeof(Character), ComponentType.Exclude<Damaged>()); //
+            //switchSkinGroup2 = GetEntityQuery(typeof(Transform)); //
+        }
+
+        protected override void OnUpdate()
+        {
+            
+            Entities.With(switchSkinGroup).ForEach((Entity entity, Character character, ref Health health)   =>
+            {
+                //transform.rotation *= Quaternion.AngleAxis(rotator.Speed * deltaTime, Vector3.up);
+                if (health.Value <= (health.Max / 2))
+                {
+                    
+                    character.skinnedMeshRenderer.material.SetFloat(DamageAmount, 1);
+                    PostUpdateCommands.AddComponent(entity, new Damaged());
+                }
+            });
+           
+        }
+    }
+}

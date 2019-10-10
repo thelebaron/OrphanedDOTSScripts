@@ -1,0 +1,32 @@
+using Game.Components;
+using Game.Systems;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+/*
+
+public class TestSystem : JobComponentSystem
+{
+    // Use the [BurstCompile] attribute to compile a job with Burst. You may see significant speed ups, so try it!
+    [BurstCompile]
+    struct job : IJobForEachWithEntity<Pain>
+    {
+        public void Execute(Entity entity, int index, ref Pain c0)
+        {
+            c0.Finished = 99;
+        }
+    }
+
+    // OnUpdate runs on the main thread.
+    protected override JobHandle OnUpdate(JobHandle inputDependencies)
+    {
+        var j = new job();
+
+        return j.Schedule(this, inputDependencies);
+    }
+}
+*/

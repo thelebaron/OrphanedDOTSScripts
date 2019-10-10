@@ -1,0 +1,75 @@
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Transforms;
+
+namespace Game.Modules.Utility
+{
+    public struct DeferredParent : IComponentData
+    {
+        public Entity Parent;
+        public int Frame;
+    }
+
+    // todo move to mainthread? batch this? https://gametorrahod.com/batched-operation-on-entitymanager/ research
+    [UpdateInGroup(typeof(UtilityUpdateGroup))]
+    public class DeferredParentSystem : JobComponentSystem
+    {
+        private EntityQuery deferredQuery;
+        private EndSimulationEntityCommandBufferSystem endSimulationEntityCommandBufferSystem;
+        
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            deferredQuery = GetEntityQuery(
+                ComponentType.ReadOnly<DeferredParent>(),
+                ComponentType.Exclude<Disabled>());
+            endSimulationEntityCommandBufferSystem = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+        }
+
+        struct ReParentJob : IJobForEachWithEntity<DeferredParent>
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+
+            public void Execute(Entity entity, int index, ref DeferredParent c0)
+            {
+                /*
+                if (c0.Frame == 2)
+                {
+                    
+                    CommandBuffer.AddComponent(index, entity, new Parent{ Value = c0.Parent });
+                    CommandBuffer.AddComponent(index, entity, new LocalToParent());
+                }
+                
+                //Debug.Log(c0.Parent);
+                if (c0.Frame < 10)
+                {
+                    c0.Frame++;
+                    return;
+                }
+                */
+                
+                CommandBuffer.AddComponent(index, entity, new Parent{ Value = c0.Parent });
+                CommandBuffer.AddComponent(index, entity, new PreviousParent{ Value = c0.Parent });
+                CommandBuffer.AddComponent(index, entity, new LocalToParent());
+                
+                CommandBuffer.RemoveComponent<DeferredParent>(index, entity);
+                CommandBuffer.RemoveComponent<LinkedEntityGroup>(index, entity);
+            }
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            //return inputDeps;
+            var reparentJob = new ReParentJob
+            {
+                CommandBuffer = endSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent()
+            };
+
+            var handle = reparentJob.Schedule(this, inputDeps);
+            endSimulationEntityCommandBufferSystem.AddJobHandleForProducer(handle);
+            
+            handle.Complete();
+            return reparentJob.Schedule(this, inputDeps);
+        }
+    }
+}

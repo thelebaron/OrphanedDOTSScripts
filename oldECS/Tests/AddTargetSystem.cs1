@@ -1,0 +1,62 @@
+using Game.Components;
+using Unity.Entities;
+using Unity.Jobs;
+
+namespace Game.Systems
+{
+    
+    /// <summary>
+    /// TargetAddSystem summary
+    ///
+    /// adds a target if a valid search target exists, for other systems to read. 
+    /// </summary>
+    
+    [UpdateAfter(typeof(AddTargetSystem))]
+    public class AddTargetBarrier : BarrierSystem { }
+    
+    public class AddTargetSystem : JobComponentSystem
+    {
+        private AddTargetBarrier addTargetBarrier;
+        
+        protected override void OnCreateManager()
+        {
+            addTargetBarrier = World.Active.GetOrCreateManager<AddTargetBarrier>();
+        }
+
+        
+        // if theres a valid search target
+        [RequireSubtractiveComponent(typeof(Dead),typeof(Target))]
+        struct AddTargetJob : IJobForEachWithEntity<SearchInfo>
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+            
+            public void Execute(Entity entity, int index, ref SearchInfo c0)
+            {
+                if (!c0.Entity.Equals(Entity.Null))
+                {
+                    CommandBuffer.AddComponent(index, entity, new Target
+                    {
+                        Entity = c0.Entity,
+                        Position = c0.Position,
+                        Health = c0.Health,
+                        Visible = true,
+                        HiddenTime = 0,
+                        NextRaycast = 0
+                    });
+                }
+            }
+        }
+        
+        
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            
+            var addTargetJob = new AddTargetJob { CommandBuffer = addTargetBarrier.CreateCommandBuffer().ToConcurrent() };
+            var addTargetHandle = addTargetJob.Schedule(this, inputDeps);
+            addTargetHandle.Complete();
+            
+            return addTargetHandle;
+        }
+    }
+}

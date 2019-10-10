@@ -1,0 +1,54 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Transforms;
+using UnityEngine;
+
+    
+public class MoveByVelocitySystem : JobComponentSystem 
+{
+    private ComponentGroup group;
+     
+    protected override void OnCreateManager() 
+    {
+        group = GetEntityQuery(typeof(Position), typeof(Velocity), typeof(SpawnState));
+    }
+     
+    protected override JobHandle OnUpdate(JobHandle inputDeps) 
+    {
+        NativeArray<ArchetypeChunk> chunks = group.CreateArchetypeChunkArray(Allocator.TempJob);
+
+        var job = new NewJob 
+        {
+            deltaTime = Time.deltaTime,
+            positionType = GetArchetypeChunkComponentType<Position>(),
+            velocityType = GetArchetypeChunkComponentType<Velocity>(),
+            chunks = chunks
+        };
+
+        return job.Schedule(group, inputDeps);
+    }
+ 
+    private struct NewJob : IJobChunk 
+    {
+        public float deltaTime;
+         
+        public ArchetypeChunkComponentType<Position> positionType;
+        public ArchetypeChunkComponentType<Velocity> velocityType;
+ 
+        [ReadOnly]
+        [DeallocateOnJobCompletion]
+        public NativeArray<ArchetypeChunk> chunks;
+
+        public void Execute(ArchetypeChunk chunk, int chunkIndex, int firstEntityIndex)
+        {
+            NativeArray<Position> positions = chunk.GetNativeArray(positionType);
+            NativeArray<Velocity> velocities = chunk.GetNativeArray(velocityType);
+            positions[chunkIndex] = new Position
+            {
+                Value = positions[chunkIndex].Value + velocities[chunkIndex].Value * deltaTime
+            };
+        }
+    }
+}

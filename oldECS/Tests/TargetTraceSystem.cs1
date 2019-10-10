@@ -1,0 +1,313 @@
+using Game.Components;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+
+
+/*
+namespace Game.Systems
+{
+    [UpdateBefore(typeof(TargetTraceSystem))]
+    public class TargetTraceBarrier : BarrierSystem { }
+    
+    [UpdateBefore(typeof(SearchManager))]
+    public class TargetTraceSystem : JobComponentSystem
+    {
+        private TargetTraceBarrier traceBarrier;
+        
+        private ComponentGroup checkGroup;
+        private ComponentGroup targetGroup;
+        
+        protected override void OnCreateManager()
+        {
+            traceBarrier = World.Active.GetOrCreateManager<TargetTraceBarrier>();
+            
+            var query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Target), typeof(Position) },
+                None = new ComponentType[]{ typeof(Dead) },
+            };
+            checkGroup = GetEntityQuery(query);
+            
+            query = new EntityQueryDesc
+            {
+                All = new ComponentType[]{ typeof(Position), typeof(Health) },
+                None = new ComponentType[]{ typeof(Dead) },  
+            };
+            targetGroup = GetEntityQuery(query);
+            
+        }
+        
+        
+        [BurstCompile]
+        private struct SetupJob : IJobParallelFor
+        {
+            [ReadOnly] public float deltaTime;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Entity> checkEntity;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Target> checkTarget;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Position> checkPosition;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Entity> targetEntity;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Position> targetPosition;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<Health> targetHealth;
+            
+            [NativeDisableParallelForRestriction] [WriteOnly] public NativeArray<float> timerBuffer;
+            [NativeDisableParallelForRestriction] [WriteOnly] public NativeArray<float> distanceBuffer;
+            [NativeDisableParallelForRestriction] [WriteOnly] public NativeArray<Target> targetinfoBuffer;
+            [NativeDisableParallelForRestriction] [WriteOnly] public NativeArray<RaycastCommand> raycastCommandsBuffer;
+            
+            
+            public void Execute(int i)
+            {
+                // cant work on a zero sized array
+                if(targetEntity.Length == 0)
+                    return;
+                // skip if target null/dead
+                if(checkTarget[i].Entity.Equals(Entity.Null))
+                    return;
+                
+                // init variables
+                var targetHealth = checkTarget[i].Health;
+                var targetPos = checkTarget[i].Position;
+                var raycastTimer = checkTarget[i].NextRaycast + deltaTime;
+                var origin = checkPosition[i].Value + ((float3)Vector3.up * 1.75f);
+                var dir = Vector3.zero;
+
+                //if (raycastTimer > 1)
+                //{
+                    //raycastTimer = 0;
+                    //if the time is ready - prepare a raycast
+                for (int j = 0; j < targetEntity.Length; j++)
+                {
+                    if(checkTarget[i].Entity.Equals(targetEntity[j])) //if(target_entity[j].Equals(checktarget[i].entity))
+                    {
+                        //ready a raycast to check for visibility
+                        var targetsposition_forraycast = targetPosition[j].Value + ((float3)Vector3.up * 1.75f);
+                        dir = targetsposition_forraycast - origin;
+                        dir = math.normalize(dir);
+                        distanceBuffer[i] = math.distance(checkPosition[i].Value, targetPosition[j].Value);
+                        raycastCommandsBuffer[i] = new RaycastCommand(origin, dir, 100, GameLayers.MASK_GROUND);
+                    
+                        targetHealth = this.targetHealth[j].Value;
+                        break;
+                    }
+                }
+                //}
+
+                var tempTarget = new Target
+                {
+                    Entity = checkTarget[i].Entity,
+                    Position = targetPos,
+                    Health = targetHealth,
+                    Visible = checkTarget[i].Visible,
+                    //canSeeTime = checktarget[i].canSeeTime;
+                    HiddenTime = checkTarget[i].HiddenTime,
+                    NextRaycast = raycastTimer
+                };
+
+                targetinfoBuffer[i] = tempTarget;
+            }
+        }
+
+        [BurstCompile]
+        private struct AnalyseJob : IJobParallelFor
+        {
+            [ReadOnly] public float deltaTime;
+            
+            [ReadOnly] public NativeArray<Entity> checkEntity;
+            [ReadOnly] public NativeArray<Target> checkTarget;
+            [ReadOnly] public NativeArray<Position> checkPosition;
+            
+            [ReadOnly] public NativeArray<Entity> targetEntity;
+            [ReadOnly] public NativeArray<Position> targetPosition;
+            [ReadOnly] public NativeArray<Health> targetHealth;
+            
+            [ReadOnly] public NativeArray<float> distanceBuffer;
+            [NativeDisableParallelForRestriction] public NativeArray<Target> targetinfoBuffer;
+            [ReadOnly] public NativeArray<RaycastCommand> raycastCommandsBuffer;
+            [ReadOnly] public NativeArray<RaycastHit> raycastHitsBuffer;
+            
+            
+            public void Execute(int i)
+            {
+                // cant work on a zero sized array, is this necessary?
+                if(targetEntity.Length == 0)
+                    return;
+                
+                // make sure we are working with a valid entity
+                if(checkTarget[i].Entity.Equals(Entity.Null))
+                    return;
+
+                // min distance, if the result falls between 0 and this, something blocked our los 
+                var minDist = distanceBuffer[i] - 0.65f;
+                if(raycastHitsBuffer[i].distance > 0 && raycastHitsBuffer[i].distance < minDist)
+                {
+                    //cant see target, just keep current settings aside from the time
+                    targetinfoBuffer[i] = new Target
+                    {
+                        Entity = targetinfoBuffer[i].Entity,
+                        Position = targetinfoBuffer[i].Position,
+                        Health = targetinfoBuffer[i].Health,
+                        Visible = false,
+                        HiddenTime = targetinfoBuffer[i].HiddenTime + deltaTime,
+                        NextRaycast = targetinfoBuffer[i].NextRaycast
+                    };
+                }
+                
+                // we successfully traced the target, update its params
+                else
+                {
+                    for (int j = 0; j < targetEntity.Length; j++)
+                    {
+                        //can see the target, lets refresh all the variables
+                        if(checkTarget[i].Entity.Equals(targetEntity[j]))
+                        {
+                            targetinfoBuffer[i] = new Target
+                            {
+                                Entity = targetinfoBuffer[i].Entity,
+                                Position = targetPosition[j].Value,
+                                Health = targetHealth[j].Value,
+                                Visible = true,
+                                HiddenTime = 0,
+                                NextRaycast = targetinfoBuffer[i].NextRaycast
+                            };
+                                
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // reintegrates results into the actual component
+        private struct SetEntityComponentJob : IJob
+        {
+            public EntityCommandBuffer commandBuffer;
+            [ReadOnly] public float dt;
+            [ReadOnly] public NativeArray<Entity> checkEntity;
+            [ReadOnly] public NativeArray<Target> targetInfoBuffer;
+            
+            public void Execute()
+            {
+                for (int i = 0; i < checkEntity.Length; i++)
+                {
+                    var entity = targetInfoBuffer[i].Entity;
+                    
+                    if (targetInfoBuffer[i].Health <= 0)
+                        entity = Entity.Null;
+                    
+                    float newBlockedSightTime = targetInfoBuffer[i].HiddenTime + dt;
+                    
+                    if (targetInfoBuffer[i].Visible)
+                        newBlockedSightTime = 0;
+                    
+                    commandBuffer.SetComponent(checkEntity[i], new Target
+                    {
+                        Entity = entity,
+                        Position = targetInfoBuffer[i].Position,
+                        Health = targetInfoBuffer[i].Health,
+                        Visible = targetInfoBuffer[i].Visible,
+                        HiddenTime = newBlockedSightTime,
+                        NextRaycast = targetInfoBuffer[i].NextRaycast
+                    });
+                }
+            }
+        }
+
+
+
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var deltatime = Time.deltaTime;
+            var checkLength = this.checkGroup.CalculateLength();
+            
+            var checkEntity = this.checkGroup.ToEntityArray(Allocator.TempJob);
+            var checkTargetInfo = this.checkGroup.ToComponentDataArray<Target>(Allocator.TempJob);
+            var checkPosition = this.checkGroup.ToComponentDataArray<Position>(Allocator.TempJob);
+            
+            var targetEntity = this.targetGroup.ToEntityArray(Allocator.TempJob);
+            var targetPosition = this.targetGroup.ToComponentDataArray<Position>(Allocator.TempJob);
+            var targetHealth = this.targetGroup.ToComponentDataArray<Health>(Allocator.TempJob);
+            
+            //filled out by jobs
+            var timerBuffer = new NativeArray<float>(checkLength, Allocator.TempJob);
+            var distanceBuffer = new NativeArray<float>(checkLength, Allocator.TempJob);
+            var targetBuffer = new NativeArray<Target>(checkLength, Allocator.TempJob);
+            var raycastCommands = new NativeArray<RaycastCommand>(checkLength, Allocator.TempJob);
+            var raycastHits = new NativeArray<RaycastHit>(checkLength, Allocator.TempJob);
+            
+            
+            var setupjob = new SetupJob
+            {
+                deltaTime = deltatime,
+                checkEntity = checkEntity,
+                checkTarget = checkTargetInfo,
+                checkPosition = checkPosition,
+                timerBuffer = timerBuffer,
+                distanceBuffer = distanceBuffer,
+                targetinfoBuffer = targetBuffer,
+                raycastCommandsBuffer = raycastCommands,
+                targetEntity = targetEntity,
+                targetPosition = targetPosition,
+                targetHealth = targetHealth
+            };
+            
+            var setupHandle = setupjob.Schedule(checkGroup.CalculateLength(), 8, inputDeps);
+            setupHandle.Complete();
+            
+            var rayHandle = RaycastCommand.ScheduleBatch(raycastCommands, raycastHits, 15, setupHandle);
+            
+            var analyseJob = new AnalyseJob
+            {
+                deltaTime = deltatime,
+                checkEntity = checkEntity,
+                checkTarget = checkTargetInfo,
+                checkPosition = checkPosition,
+                distanceBuffer = distanceBuffer,
+                targetinfoBuffer = targetBuffer,
+                raycastCommandsBuffer = raycastCommands,
+                raycastHitsBuffer = raycastHits,
+                targetEntity = targetEntity,
+                targetPosition = targetPosition,
+                targetHealth = targetHealth
+            };
+            
+            var analyseHandle = analyseJob.Schedule(checkGroup.CalculateLength(), 8, rayHandle);
+
+            var commandJob = new SetEntityComponentJob
+            {
+                dt = deltatime,
+                commandBuffer = traceBarrier.CreateCommandBuffer(),
+                checkEntity = checkEntity,
+                targetInfoBuffer = targetBuffer
+            };
+
+            var commandHandle = commandJob.Schedule(analyseHandle);
+
+            commandHandle.Complete();
+ 
+            
+            
+            checkEntity.Dispose();
+            checkPosition.Dispose();
+            checkTargetInfo.Dispose();
+            targetEntity.Dispose();
+            targetPosition.Dispose();
+            targetHealth.Dispose();
+            
+            timerBuffer.Dispose();
+            distanceBuffer.Dispose();
+            targetBuffer.Dispose();
+            raycastCommands.Dispose();
+            raycastHits.Dispose();
+
+            return inputDeps;
+        }
+
+
+    }
+}*/

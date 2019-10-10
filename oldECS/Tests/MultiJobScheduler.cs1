@@ -1,0 +1,70 @@
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using UnityEngine;
+
+namespace Game.Systems.Tests
+{
+    public class MultiJobScheduler : JobComponentSystem
+    {
+        public struct MultiJob : IJob
+        {
+            public int integer;
+            
+            public void Execute()
+            {
+                for (int i = 0; i < 1; i++)
+                {
+                    integer++;
+                }
+                //var rayhit = new RaycastHit();
+                //var hit = Physics.Raycast(Vector3.zero, Vector3.up,out rayhit,100, 100 );
+                
+            }
+        }
+        
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var list = new NativeList<int>(10, Allocator.TempJob);
+            list.Add(1);
+            list.Add(2);
+            list.Add(3);
+            list.Add(4);
+            list.Add(10);
+            //Debug.Log(list[4]);
+            list.Dispose();
+            var jobs = new MultiJob[10];
+            var handle = new JobHandle[10];
+            
+            for (int i = 0; i < 10; i++)
+            {
+                jobs[i] = new MultiJob();
+            }
+
+            for (int i = 0; i < 10; i++)
+            {
+                handle[i] = jobs[i].Schedule(inputDeps);
+            }
+            
+            for (int i = 0; i < 10; i++)
+            {
+                handle[i].Complete();
+            }
+            
+            return inputDeps;
+        }
+
+        public JobHandle Schedule(MultiJob job, JobHandle inputDeps)
+        {
+            var handle = job.Schedule(inputDeps);
+            return handle;
+        }
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            Debug.Log("Started");
+        }
+    }
+}
+

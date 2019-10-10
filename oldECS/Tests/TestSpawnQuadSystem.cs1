@@ -1,0 +1,69 @@
+using UnityEngine;
+using Game.Components;
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+using Unity.Transforms;
+
+namespace Game.Systems.Tests
+{
+    public class TestSpawnQuadSystem : ComponentSystem
+    {
+        public static bool spawn;
+        
+        private static EntityArchetype QuadArchetype;
+        public static RenderMesh quadLook;
+
+        public GameObject spawner;
+        
+        protected override void OnUpdate()
+        {
+            return;
+            if (Input.GetKey(KeyCode.Space))
+            {
+                for (int i = 0; i < 1000; i++)
+                {
+                    var entityManager = World.Active.EntityManager;
+                    Entity ent = entityManager.CreateEntity(QuadArchetype);
+            
+                    quadLook = GetLookFromPrototype("QuadRenderPrototype");
+                    // We can tweak a few components to make more sense like this.
+                    entityManager.SetComponentData(ent, new Position { Value = spawner.transform.position });
+                    entityManager.SetComponentData(ent, new Rotation { Value = quaternion.identity });
+                    entityManager.SetComponentData(ent, new FaceCamera { Value = true });
+            
+            
+
+                    // Finally we add a shared component which dictates the rendered look
+                    entityManager.AddSharedComponentData(ent, quadLook);
+                }
+            }
+
+            if (!spawn)
+                return;
+
+
+
+            spawn = false;
+
+        }
+
+        protected override void OnStartRunning()
+        {
+        
+            var entityManager = World.Active.EntityManager;
+            
+            QuadArchetype = entityManager.CreateArchetype(typeof(Position),typeof(Rotation), typeof(FaceCamera)/*, typeof(MeshInstanceRenderer)*/);
+            
+            spawner = GameObject.Find("QuadSpawner");
+        }
+        
+        private static RenderMesh GetLookFromPrototype(string protoName)
+        {
+            var proto = GameObject.Find(protoName);
+            var result = proto.GetComponent<RenderMeshComponent>().Value;
+            //Object.Destroy(proto);
+            return result;
+        }
+    }
+}

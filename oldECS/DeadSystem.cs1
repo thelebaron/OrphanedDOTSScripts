@@ -1,0 +1,85 @@
+using Game.Components;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+
+namespace Game.Modules.Damage
+{
+    [UpdateInGroup(typeof(DamageUpdateGroup))]
+    //[UpdateAfter(typeof(DeadSystem))]
+    //public class DeadBarrier : EntityCommandBufferSystem { }
+    public class DeadSystem : JobComponentSystem
+    {
+        EndSimulationEntityCommandBufferSystem endSimulationEntityCommandBufferSystem;
+        private EntityQuery m_Health;
+        protected override void OnCreate()
+        {
+            endSimulationEntityCommandBufferSystem = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+            m_Health = GetEntityQuery(ComponentType.Exclude<Dead>(), ComponentType.Exclude<Dying>(), ComponentType.ReadOnly<Health>());
+        }
+       
+        /// <summary>
+        /// Dead system summary
+        ///
+        /// Dead tags signify systems not to update or process entities that contain the Dead tag
+        ///
+        /// Dying signify entities to run special things like throw gibs or start a dying animation
+        /// 
+        /// </summary>
+        
+        [ExcludeComponent(typeof(Dead), typeof(Dying))]
+        struct ProcessHealth : IJobForEachWithEntity<Health>
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+
+            public void Execute(Entity entity, int index, ref Health c0)
+            {
+                if (c0.Value < 1)
+                {
+                    CommandBuffer.AddComponent(index, entity, new Dying());
+                    CommandBuffer.AddComponent(index, entity, new Dead());
+                }
+            }
+        }
+        
+        //[BurstCompile]
+        struct ProcessDyingTag : IJobForEachWithEntity<Dying>
+        {
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+            
+            public void Execute([ReadOnly] Entity entity, int index, [ReadOnly] ref Dying c0)
+            {
+                if (c0.Frame < 1)
+                {
+                    c0.Frame++;
+                }
+                else
+                {
+                    CommandBuffer.RemoveComponent<Dying>(index, entity);
+                }
+                
+            }
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var processHealthJob = new ProcessHealth
+            {
+                CommandBuffer = endSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent()
+            };
+            var processHealthHandle = processHealthJob.Schedule(this, inputDeps);
+            endSimulationEntityCommandBufferSystem.AddJobHandleForProducer(processHealthHandle);
+            
+            var processDyingJob = new ProcessDyingTag{ CommandBuffer = endSimulationEntityCommandBufferSystem.CreateCommandBuffer().ToConcurrent() };
+            var processDyingHandle = processDyingJob.Schedule(this, processHealthHandle);
+            endSimulationEntityCommandBufferSystem.AddJobHandleForProducer(processDyingHandle);
+            
+            processDyingHandle.Complete();
+            return processDyingHandle;
+        }
+    }
+    
+    
+}
+
+

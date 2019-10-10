@@ -1,0 +1,65 @@
+using Game.Components;
+using Unity.Entities;
+using Unity.Transforms;
+using UnityEngine;
+using Behaviour = UnityEngine.Behaviour;
+
+//using Behaviour = Game.Components.Behaviour;
+
+namespace Game.Systems
+{
+    public class DetachNpcLinkSystem : ComponentSystem
+    {
+        private ComponentGroup npcGroup;
+        private ComponentGroup weaponGroup;
+        private ComponentGroup bootstrapGroup;
+
+        protected override void OnCreateManager()
+        {
+            base.OnCreateManager();
+            
+            // Bootstrap weapons link components
+            bootstrapGroup = GetEntityQuery(ComponentType.Subtractive<NpcHealthLink>(), ComponentType.ReadOnly<DetachableWeapon>());
+
+            npcGroup = GetEntityQuery(ComponentType.ReadOnly<Behaviour>(), ComponentType.ReadOnly<Dead>(), ComponentType.ReadOnly<Health>());
+            weaponGroup = GetEntityQuery(typeof(NpcHealthLink), typeof(DetachableWeapon));
+        }
+
+        
+        
+        protected override void OnUpdate()
+        {
+            var length = npcGroup.CalculateLength();
+            var npcEntity = npcGroup.GetEntityArray();
+            var npcHealth = npcGroup.GetComponentDataArray<Health>();
+            var weaponsEntity = weaponGroup.GetEntityArray();
+            var detachableWeapon = weaponGroup.GetComponentArray<DetachableWeapon>();
+            var npcLink =  weaponGroup.GetComponentDataArray<NpcHealthLink>();
+            
+            for (int i = 0; i < length; i++)
+            {
+                for (int j = 0; j < weaponsEntity.Length; j++)
+                {
+                    if (npcEntity[i].Equals(npcLink[j].LinkedEntity))
+                    {
+                        detachableWeapon[j].Decouple();
+                        PostUpdateCommands.DestroyEntity(weaponsEntity[j]);
+                    }
+                }
+            }
+            
+            // bootstrap any unspawned weapon entities
+            var detachableArray = bootstrapGroup.GetComponentArray<DetachableWeapon>();
+            var bootstrapEntity = bootstrapGroup.GetEntityArray();
+            
+            for (int i = 0; i < bootstrapGroup.CalculateLength(); i++)
+            {
+                PostUpdateCommands.AddComponent(bootstrapEntity[i], new NpcHealthLink
+                {
+                    LinkedEntity = detachableArray[i].rootGameObjectEntity.Entity, 
+                    Value = true
+                });
+            }
+        }
+    }
+}

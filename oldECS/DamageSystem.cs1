@@ -1,0 +1,116 @@
+using Game.Components;
+using Game.Systems.Combat;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+
+namespace Game.Modules.Damage
+{
+    public class DamageSystem : JobComponentSystem
+    {
+        private EntityQuery m_Health;
+        private EntityQuery m_Message;
+        private EndSimulationEntityCommandBufferSystem m_CommandBuffer;
+        private EntityArchetype m_ThreatArchetype;
+        
+        protected override void OnCreateManager()
+        {
+            m_Health = GetEntityQuery(ComponentType.Exclude<Dead>(), ComponentType.ReadWrite<Health>(), ComponentType.ReadOnly<LocalToWorld>());
+            m_Message = GetEntityQuery(ComponentType.ReadWrite<DamageMessage>());
+            m_CommandBuffer = World.Active.GetOrCreateSystem<EndSimulationEntityCommandBufferSystem>();
+            m_ThreatArchetype = EntityManager.CreateArchetype(ComponentType.ReadWrite<Threat>(), ComponentType.ReadWrite<Translation>(), ComponentType.ReadWrite<LocalToWorld>());
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var job = new Job
+            {
+                Entity = m_Health.ToEntityArray(Allocator.TempJob),
+                Health = m_Health.ToComponentDataArray<Health>(Allocator.TempJob),
+                LocalToWorlds = m_Health.ToComponentDataArray<LocalToWorld>(Allocator.TempJob),
+                DamageEntities = m_Message.ToEntityArray(Allocator.TempJob),
+                DamageMessages = m_Message.ToComponentDataArray<DamageMessage>(Allocator.TempJob),
+                Buffer         = m_CommandBuffer.CreateCommandBuffer().ToConcurrent(),
+                DamageHistory  = GetComponentDataFromEntity<DamageHistory>()
+            };
+
+            var handle = job.Schedule(m_Health.CalculateLength(),64, inputDeps);
+            
+            return handle;
+        }
+
+        [ExcludeComponent(typeof(Dead))]
+        struct Job : IJobParallelFor
+        {
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> Entity;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Health> Health;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<LocalToWorld> LocalToWorlds;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<Entity> DamageEntities;
+            [ReadOnly][DeallocateOnJobCompletion] public NativeArray<DamageMessage> DamageMessages;
+            public EntityCommandBuffer.Concurrent Buffer;
+            [ReadOnly] public ComponentDataFromEntity<DamageHistory> DamageHistory;
+            
+            public void Execute(int index)
+            {
+                var health = Health[index];
+
+                var tookDamage = false;
+                var instigator = Unity.Entities.Entity.Null;
+                var instigatorPosition = float3.zero;
+                
+                for (int i = 0; i < DamageMessages.Length; i++)
+                {
+                    
+                    
+                    if (DamageMessages[i].Target.Equals(Entity[index]))
+                    {
+                        health.ApplyDamage(DamageMessages[i].DamageEvent);
+                        tookDamage = true;
+                        instigator = DamageMessages[i].DamageEvent.instigator;
+                        instigatorPosition = DamageMessages[i].DamageEvent.instigatorPosition;
+                        
+                        if (DamageHistory.Exists(Entity[index]))
+                        {
+                            //DamageHistory[Entity[index]].ApplyDamage(DamageMessages[i].DamageEvent);
+                            Buffer.SetComponent(index, Entity[index], new DamageHistory
+                            {
+                                TookDamage       = true,
+                                LastDamageAmount = DamageMessages[i].DamageEvent.damage,
+                                LastDamager      = DamageMessages[i].DamageEvent.instigator,
+                                LastDamageEvent  = DamageMessages[i].DamageEvent
+                            });
+                        }
+                    }
+                    
+                    Buffer.DestroyEntity(index, DamageEntities[i]);
+                }
+                
+                Buffer.SetComponent(index, Entity[index], new Health
+                {
+                    Value        = health.Value,
+                    Max          = Health[index].Max,
+                    Invulnerable = Health[index].Invulnerable
+                });
+
+                if (tookDamage)
+                {
+                    var threat = Buffer.CreateEntity(index);
+                    Buffer.AddComponent(index, threat, new Threat
+                    {
+                        ThreatEntity = instigator,
+                        Radius       = 150,
+                        Position     = instigatorPosition
+                    });
+                    
+                    Buffer.AddComponent(index,threat, new Translation
+                    {
+                        Value = LocalToWorlds[index].Position
+                    });
+                    Buffer.AddComponent(index, threat, new LocalToWorld());
+                }
+            }
+        }
+    }
+}

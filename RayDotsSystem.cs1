@@ -1,0 +1,104 @@
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Physics.Systems;
+using Unity.Transforms;
+using UnityEngine;
+
+// ReSharper disable RedundantNameQualifier
+
+namespace Unity.Physics
+{
+    public class RayDotsSystem : JobComponentSystem
+    {
+        private BuildPhysicsWorld m_BuildPhysicsWorldSystem;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            m_BuildPhysicsWorldSystem = World.Active.GetExistingSystem<BuildPhysicsWorld>();
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var raycastHits = new NativeArray<RaycastHit>(1, Allocator.Temp);
+            var raycastInputs = new NativeArray<RaycastInput>(1, Allocator.Temp);
+            
+            var job = new RaycastJob
+            {
+                world = m_BuildPhysicsWorldSystem.PhysicsWorld.CollisionWorld,
+                inputs = raycastInputs,
+                results = raycastHits 
+            };
+            
+            raycastHits.Dispose();
+            raycastInputs.Dispose();
+            return inputDeps;
+        }
+
+
+        //[BurstCompile]
+        public struct RaycastJob : IJobParallelFor
+        {
+            [ReadOnly] public Physics.CollisionWorld world;
+            [ReadOnly] public NativeArray<Physics.RaycastInput> inputs;
+            public NativeArray<Physics.RaycastHit> results;
+
+            public void Execute(int index)
+            {
+                Physics.RaycastHit hit;
+                world.CastRay(inputs[index], out hit);
+                results[index] = hit;
+                
+                bool haveHit = math.any(results[index].SurfaceNormal);
+                if (haveHit)
+                {
+                    // see hit.Position 
+                    // see hit.SurfaceNormal
+                    Entity e = world.Bodies[hit.RigidBodyIndex].Entity;
+                    //return e;
+                }
+            }
+        }
+
+        struct Raycast : IJobForEachWithEntity<QueryTest, Translation, LocalToWorld>
+        {
+            [ReadOnly] public Physics.CollisionWorld world;
+            
+            public void Execute(Entity entity, int index, ref QueryTest c0, ref Translation c1, ref LocalToWorld c2)
+            {
+                var rayInput = new RaycastInput
+                {
+                    Filter = CollisionFilter.Default,
+                    Ray = new Ray
+                    {
+                        Direction = Vector3.down,
+                        Origin = c2.Position
+                    }
+                    
+                };
+
+                if (world.CastRay(rayInput, out var hit))
+                {
+                    
+                }
+            }
+        }
+    }
+
+    public struct QueryTest : IComponentData
+    {
+    
+    }
+
+    public class QueryTestProxy : MonoBehaviour, IConvertGameObjectToEntity
+    {
+        public void Convert(Entity entity, EntityManager dstManager, GameObjectConversionSystem conversionSystem)
+        {
+            dstManager.AddComponentData(entity, new QueryTest());
+            dstManager.AddComponentData(entity, new Translation());
+            dstManager.AddComponentData(entity, new LocalToWorld());
+        }
+    }
+}

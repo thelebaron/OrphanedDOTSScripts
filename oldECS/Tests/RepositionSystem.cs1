@@ -1,0 +1,234 @@
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Jobs;
+using Unity.Mathematics;
+using Unity.Transforms;
+using UnityEngine;
+using Random = UnityEngine.Random;
+
+namespace Game.Modules.Characters
+{
+	[UpdateInGroup(typeof(AiGroup))]
+    public class RepositionSystem : ComponentSystem
+    {
+        
+        int m_nextRequestId;
+        int m_lastHandledRequestId = -1;
+        private const int c_bufferSize = 64;
+	    Query[] m_queries = new Query[c_bufferSize];
+        Result[] m_results = new Result[c_bufferSize];
+        bool[] m_resultReady = new bool[c_bufferSize];
+        
+        public struct Query
+        {
+	        public Translation position;
+	        public Rotation rotation;
+	        public float3 targetPosition;
+	        public float distance;
+	        public int testAgainsEnvironment;
+        }
+        
+        public struct Result
+        {
+	        public float3 destination;
+        }
+        
+
+        
+        public int RegisterQuery(Query query)
+        {
+            var requestId = m_nextRequestId;
+            var index = requestId % c_bufferSize;
+		
+            m_queries[index] = query;
+            m_nextRequestId++;
+		
+            var requestCount = m_nextRequestId - m_lastHandledRequestId - 1;
+            if (requestCount >= 10)
+                HandleRequests();
+		
+            return requestId;
+        }
+
+        void HandleRequests()
+        {
+            var startId = m_lastHandledRequestId + 1;
+            var endId = m_nextRequestId - 1;
+            var count = endId - startId + 1;
+		
+            var queries = new Query[count];
+            var results = new Result[count];
+
+            var bufferIndex = 0;
+            for (var id = startId; id <= endId; id++)
+            {
+                var index = id % c_bufferSize;
+                queries[bufferIndex] = m_queries[index];
+                bufferIndex++;
+            }
+
+            HandleRequests(count, queries, results);
+		
+            bufferIndex = 0;
+            for (var id = startId; id <= endId; id++)
+            {
+                var index = id % c_bufferSize;
+                m_results[index] = results[bufferIndex];
+			
+                /*
+                if (m_results[index].collider != null && m_results[index].collider.transform.parent != null)
+                {
+                    var collider = m_results[index].collider;
+                    var hitCollision = collider.GetComponent<HitCollision>();
+                    if (hitCollision != null)
+                    {
+                        m_results[index].hitCollisionOwner = hitCollision.owner.GetComponent<GameObjectEntity>().Entity;
+                    }
+                }*/
+			
+                m_resultReady[index] = true;
+                bufferIndex++;
+            }
+            m_lastHandledRequestId = endId;
+        }
+
+        private struct OpenCoverPositionJob : IJobParallelFor
+        {
+	        [ReadOnly] public NativeArray<Translation> positions;
+	        [ReadOnly] public NativeArray<Rotation> rotations;
+	        [NativeDisableParallelForRestriction] public NativeArray<RaycastCommand> raycastCommands;
+	        
+	        public void Execute(int index)
+	        {
+		        var max = (index + 1) * positions.Length;
+		        var min = max - positions.Length;
+		        if (min < 0)
+			        min = 0;
+		        
+		        var rays = 6;
+		        var radius = 3f;
+		        var position = positions[index].Value;
+		        var dir = rotations[index].Value;
+		        var angle = 0;
+		        
+		        for (int i = 0, z = index + min; i < rays; i++, z++)
+		        {
+			        dir = quaternion.AxisAngle(Vector3.up, angle);
+			        var fwd = math.forward(dir);
+			        angle += 45;
+
+			        raycastCommands[z] = new RaycastCommand(position, fwd, radius);
+		        }
+	        }
+        }
+        
+		static void HandleRequests(int queryCount, Query[] queries, Result[] results)
+		{
+			var rayCommands = new NativeArray<RaycastCommand>(queryCount , Allocator.TempJob);
+			var rayResults = new NativeArray<RaycastHit>(queryCount , Allocator.TempJob);
+			var positions = new NativeArray<Translation>(queryCount, Allocator.TempJob);
+			var rotations = new NativeArray<Rotation>(queryCount, Allocator.TempJob);
+	/*
+			var raySetupJob = new OpenCoverPositionJob
+			{
+				positions = positions,
+				rotations = rotations,
+				raycastCommands = rayCommands
+			};*/
+			
+			for (var i = 0; i < queryCount; i++)
+			{
+				var query = queries[i];
+
+				var random = Random.Range(0, 6);
+				var radius = 2f * Random.Range(1.25f, 3f);
+				var position = query.targetPosition;
+				var dir = Quaternion.identity;
+				var angle = 45;
+		        
+				angle *= random;
+				dir = quaternion.AxisAngle(Vector3.up, angle);
+				var fwd = math.forward(dir);
+				fwd = math.normalize(fwd);
+				
+				results[i] = new Result{ destination = position + fwd * radius };
+			}
+/*
+			var setupHandle = raySetupJob.Schedule(queryCount, 10);
+			var handle = RaycastCommand.ScheduleBatch(rayCommands, rayResults, 10, setupHandle);
+			handle.Complete();
+	
+			// Test collision with hitCollision
+			for (var i = 0; i < queryCount; i++)
+			{
+				var query = queries[i];
+				var max = (i + 1) * queryCount;
+				var min = max - queryCount;
+				if (min < 0)
+					min = 0;
+				
+				var result = new Result();
+				
+				for (int z = min; z < max; z++)
+				{
+					if(rayResults[i].normal == Vector3.zero)
+						return;
+
+					var dest = positions[i].Value + (float3)rayCommands[i].direction.normalized * rayCommands[i].distance;
+					
+					NavMeshHit hit;
+					if (NavMesh.SamplePosition(dest, out hit, 1f, NavMesh.AllAreas))
+					{
+						result.destination = hit.position;
+						//break;
+					}
+					
+				}
+	
+	
+			}*/
+			
+			positions.Dispose();
+			rotations.Dispose();
+			rayCommands.Dispose();
+			rayResults.Dispose();
+		}
+		
+		public void GetResult(int requestId, out Query query, out Result result)
+		{
+//		GameDebug.Log("Get result id:" + requestId);
+
+			var index = requestId % c_bufferSize;
+		
+			// Result not ready so we need to handle requests
+			if (!m_resultReady[index])
+			{
+				HandleRequests();
+			}
+
+			query = m_queries[index];
+			result = m_results[index];
+		
+			m_resultReady[index] = false;
+		}
+		
+        public bool GetNewDestination(float3 origin, float3 target, float maxdistance)
+        {
+            
+            
+            return false;
+        }
+        
+        
+        
+        
+        
+        
+        
+        
+        protected override void OnUpdate()
+        {
+            
+        }
+    }
+}
